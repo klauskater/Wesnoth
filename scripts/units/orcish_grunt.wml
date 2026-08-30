@@ -1,0 +1,21 @@
+[unit_type]
+    id=orcish_grunt
+    name="Орк-пехотинец"
+    max_hitpoints=38
+
+    [movement_costs]
+        grassland=1
+    [/movement_costs]
+
+    [defense]
+        grassland=40
+    [/defense]
+
+    [attack]
+        id=sword
+        name="Меч"
+        range=melee
+        damage=9
+        strikes=2
+    [/attack]
+[/unit_type]

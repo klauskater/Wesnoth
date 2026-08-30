@@ -1,0 +1,32 @@
+[dialog]
+    id=first_battle_intro
+
+    [line]
+        speaker=bob
+        text="Ты забрёл не на ту равнину, эльф. Уходи, пока можешь."
+    [/line]
+
+    [line]
+        speaker=alice
+        text="Я не отступлю. Приготовься защищаться!"
+    [/line]
+[/dialog]
+
+[dialog]
+    id=first_battle_victory
+
+    [line]
+        speaker=alice
+        text="Бой окончен. Дорога свободна."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=first_battle_defeat
+
+    [line]
+        speaker=bob
+        text="Я предупреждал тебя, эльф."
+    [/line]
+[/dialog]
+

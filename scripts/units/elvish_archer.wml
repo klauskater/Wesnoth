@@ -1,0 +1,29 @@
+[unit_type]
+    id=elvish_archer
+    name="Эльфийский лучник"
+    max_hitpoints=29
+
+    [movement_costs]
+        grassland=1
+    [/movement_costs]
+
+    [defense]
+        grassland=40
+    [/defense]
+
+    [attack]
+        id=sword
+        name="Меч"
+        range=melee
+        damage=5
+        strikes=2
+    [/attack]
+
+    [attack]
+        id=bow
+        name="Лук"
+        range=ranged
+        damage=5
+        strikes=4
+    [/attack]
+[/unit_type]

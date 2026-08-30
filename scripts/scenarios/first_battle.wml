@@ -1,0 +1,55 @@
+[scenario]
+    id=first_battle
+    name="Первая битва"
+    random_seed=1
+
+    [resources]
+        map=maps/first_battle.wml
+        map_objects=map_objects/grassland.wml
+        unit_types=units/elvish_archer.wml,units/orcish_grunt.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/basic_combat.lua
+    [/resources]
+
+    on_start_dialog=first_battle_intro
+
+    [side]
+        id=player
+        controller=human
+    [/side]
+
+    [side]
+        id=enemy
+        controller=passive
+    [/side]
+
+    [unit]
+        id=alice
+        type=elvish_archer
+        side=player
+        x=2
+        y=2
+    [/unit]
+
+    [unit]
+        id=bob
+        type=orcish_grunt
+        side=enemy
+        x=3
+        y=2
+    [/unit]
+
+    [objective]
+        result=victory
+        when=unit_defeated
+        unit=bob
+        dialog=first_battle_victory
+    [/objective]
+
+    [objective]
+        result=defeat
+        when=unit_defeated
+        unit=alice
+        dialog=first_battle_defeat
+    [/objective]
+[/scenario]
