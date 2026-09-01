@@ -2,7 +2,16 @@
 name = "wesnoth-engine"
 version = "0.1.0"
 edition = "2024"
+default-run = "wesnoth-client"
 
 [dependencies]
+macroquad = "0.4.14"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 
+[[bin]]
+name = "wesnoth-console"
+path = "src/main.rs"
+
+[[bin]]
+name = "wesnoth-client"
+path = "src/bin/client.rs"

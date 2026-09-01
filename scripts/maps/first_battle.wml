@@ -1,14 +1,16 @@
 [map]
     id=first_battle
-    width=5
-    height=3
+    width=8
+    height=6
 
     # Строки идут сверху вниз, ячейки в строке — слева направо.
     # Для движка grassland — непрозрачный идентификатор объекта.
     data=<<
-grassland,grassland,grassland,grassland,grassland
-grassland,grassland,grassland,grassland,grassland
-grassland,grassland,grassland,grassland,grassland
+grassland,grassland,forest,grassland,hills,grassland,grassland,grassland
+grassland,forest,forest,grassland,hills,water,water,grassland
+grassland,grassland,grassland,grassland,grassland,water,grassland,grassland
+hills,hills,grassland,forest,grassland,water,grassland,forest
+grassland,water,grassland,forest,grassland,grassland,grassland,forest
+grassland,water,grassland,grassland,hills,hills,grassland,grassland
     >>
 [/map]
-

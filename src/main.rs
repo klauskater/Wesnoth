@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use wesnoth_engine::{game::Game, value::Value};
 
@@ -7,55 +7,96 @@ fn main() -> Result<(), String> {
     let mut game = Game::load(scripts, "scenarios/first_battle.wml")?;
 
     println!("{} ({})", game.name, game.id);
-    print_dialog(&game, &game.start_dialog)?;
+    print_events(game.start_events()?);
+    game.acknowledge_dialog()?;
 
     let mut weapon = "sword";
     loop {
-        let (battle, outcome) = game.attack("alice", "bob", weapon)?;
-        print_battle(&battle);
-        if let Some(outcome) = outcome {
-            println!("Сценарий завершён: {}", outcome.result);
-            print_dialog(&game, &outcome.dialog)?;
-            break;
+        let snapshot = game.snapshot()?;
+        if object_exists(&snapshot.objects, "alice") && object_exists(&snapshot.objects, "bob") {
+            let events = game.execute(
+                "resolve",
+                Value::Map(BTreeMap::from([
+                    ("attacker".into(), Value::String("alice".into())),
+                    ("defender".into(), Value::String("bob".into())),
+                    ("weapon".into(), Value::String(weapon.into())),
+                ])),
+            )?;
+            let finished = events.iter().any(|event| {
+                event.get("type").and_then(Value::as_str) == Some("scenario_finished")
+            });
+            print_events(events);
+            if finished {
+                return Ok(());
+            }
         }
-        // Первый бой показывает ответные удары, затем лук гарантирует отсутствие
-        // ответа у орка и доводит демонстрацию до результата сценария.
+        let events = game.execute("end_turn", Value::Nil)?;
+        let finished = events
+            .iter()
+            .any(|event| event.get("type").and_then(Value::as_str) == Some("scenario_finished"));
+        print_events(events);
+        if finished {
+            return Ok(());
+        }
         weapon = "bow";
     }
-    Ok(())
 }
 
-fn print_dialog(game: &Game, id: &str) -> Result<(), String> {
-    println!("\nДиалог: {id}");
-    for line in game.dialog(id)? {
-        println!("{}: {}", line.speaker, line.text);
-    }
-    Ok(())
+fn object_exists(objects: &Value, id: &str) -> bool {
+    matches!(objects, Value::List(values) if values.iter().any(|object| {
+        object.get("id").and_then(Value::as_str) == Some(id)
+    }))
 }
 
-fn print_battle(result: &Value) {
-    println!("\nБой:");
-    let Some(Value::List(strikes)) = result.get("strikes") else {
-        return;
-    };
-    for strike in strikes {
-        let Some(values) = strike.as_map() else {
-            continue;
-        };
-        let hit = matches!(values.get("hit"), Some(Value::Bool(true)));
-        println!(
-            "{} -> {} [{}]: {} (roll {}, шанс {}%, HP {})",
-            values["source"].as_str().unwrap_or("?"),
-            values["target"].as_str().unwrap_or("?"),
-            values["weapon"].as_str().unwrap_or("?"),
-            if hit {
-                "попадание"
-            } else {
-                "промах"
-            },
-            values["roll"].as_i64().unwrap_or(0),
-            values["chance"].as_i64().unwrap_or(0),
-            values["target_hitpoints"].as_i64().unwrap_or(0),
-        );
+fn print_events(events: Vec<Value>) {
+    for event in events {
+        match event.get("type").and_then(Value::as_str) {
+            Some("dialog_requested") => {
+                println!("\nDialog: {}", text(&event, "dialog"));
+                if let Some(Value::List(lines)) = event.get("lines") {
+                    for line in lines {
+                        println!("{}: {}", text(line, "speaker"), text(line, "text"));
+                    }
+                }
+            }
+            Some("battle_resolved") => {
+                println!("\nBattle:");
+                if let Some(Value::List(strikes)) = event.get("strikes") {
+                    for strike in strikes {
+                        println!(
+                            "{} -> {} [{}]: {} (HP {})",
+                            text(strike, "source"),
+                            text(strike, "target"),
+                            text(strike, "weapon"),
+                            if matches!(strike.get("hit"), Some(Value::Bool(true))) {
+                                "hit"
+                            } else {
+                                "miss"
+                            },
+                            strike
+                                .get("target_hitpoints")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                        );
+                    }
+                }
+            }
+            Some("object_moved") => println!("Object moved"),
+            Some("unit_died") => println!("Unit died: {}", text(&event, "unit")),
+            Some("turn_started") | Some("turn_ended") => println!(
+                "Turn {}: {} ({})",
+                event.get("turn").and_then(Value::as_i64).unwrap_or(0),
+                text(&event, "side"),
+                text(&event, "type")
+            ),
+            Some("scenario_finished") => {
+                println!("Scenario finished: {}", text(&event, "result"));
+            }
+            _ => println!("Unknown event: {event:?}"),
+        }
     }
+}
+
+fn text<'a>(value: &'a Value, key: &str) -> &'a str {
+    value.get(key).and_then(Value::as_str).unwrap_or("?")
 }

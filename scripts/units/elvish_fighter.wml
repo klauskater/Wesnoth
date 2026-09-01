@@ -1,17 +1,22 @@
 [unit_type]
-    id=orcish_grunt
-    name="Орк-пехотинец"
-    max_hitpoints=38
+    id=elvish_fighter
+    name="Эльфийский воин"
+    max_hitpoints=34
     max_moves=5
-    cost=16
+    cost=14
     level=1
-    max_experience=40
-    advances_to=orcish_warrior
-    alignment=chaotic
+    max_experience=32
+    advances_to=elvish_hero
+    alignment=neutral
+
+    [ability]
+        id=heals
+        value=4
+    [/ability]
 
     [movement_costs]
         grassland=1
-        forest=2
+        forest=1
         hills=2
         castle=1
         keep=1
@@ -20,9 +25,9 @@
 
     [defense]
         grassland=40
-        forest=50
+        forest=30
         hills=40
-        water=80
+        water=70
         castle=40
         keep=40
         village=40
@@ -30,7 +35,7 @@
 
     [resistance]
         blade=10
-        pierce=20
+        pierce=0
         impact=0
     [/resistance]
 
@@ -39,7 +44,10 @@
         name="Меч"
         range=melee
         damage_type=blade
-        damage=9
-        strikes=2
+        damage=6
+        strikes=3
+        [special]
+            id=slow
+        [/special]
     [/attack]
 [/unit_type]

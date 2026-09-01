@@ -1,12 +1,11 @@
 [unit_type]
-    id=elvish_archer
-    name="Эльфийский лучник"
-    max_hitpoints=29
+    id=elvish_marksman
+    name="Эльфийский стрелок"
+    max_hitpoints=36
     max_moves=6
-    cost=17
-    level=1
-    max_experience=36
-    advances_to=elvish_marksman,elvish_ranger
+    cost=30
+    level=2
+    max_experience=80
     alignment=neutral
 
     [movement_costs]
@@ -17,7 +16,6 @@
         keep=1
         village=1
     [/movement_costs]
-
     [defense]
         grassland=40
         forest=30
@@ -27,31 +25,28 @@
         keep=40
         village=40
     [/defense]
-
     [resistance]
         blade=0
         pierce=10
         impact=0
     [/resistance]
-
     [attack]
         id=sword
         name="Меч"
         range=melee
         damage_type=blade
-        damage=5
+        damage=6
         strikes=2
     [/attack]
-
     [attack]
         id=bow
-        name="Лук"
+        name="Меткий лук"
         range=ranged
         damage_type=pierce
-        damage=5
+        damage=7
         strikes=4
         [special]
-            id=marksman
+            id=magical
         [/special]
     [/attack]
 [/unit_type]

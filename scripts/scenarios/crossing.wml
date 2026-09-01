@@ -1,0 +1,110 @@
+[scenario]
+    id=crossing
+    name="Переправа"
+    random_seed=7
+
+    [resources]
+        map=maps/crossing.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml
+        unit_types=units/elvish_archer.wml,units/elvish_marksman.wml,units/elvish_ranger.wml,units/orcish_raider.wml,units/orcish_grunt.wml,units/orcish_warrior.wml
+        dialogs=dialogs/crossing.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+
+    on_start_dialog=crossing_intro
+
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+    [/side]
+
+    [unit]
+        id=kael
+        type=elvish_archer
+        side=player
+        x=2
+        y=3
+    [/unit]
+    [unit]
+        id=lyra
+        type=elvish_archer
+        side=player
+        x=2
+        y=4
+    [/unit]
+
+    [unit]
+        id=raider_north
+        type=orcish_raider
+        side=enemy
+        x=6
+        y=2
+        reserve_group=ambush
+    [/unit]
+    [unit]
+        id=raider_south
+        type=orcish_raider
+        side=enemy
+        x=6
+        y=4
+        reserve_group=ambush
+    [/unit]
+    [unit]
+        id=grom
+        type=orcish_grunt
+        side=enemy
+        x=8
+        y=3
+        reserve_group=leader
+    [/unit]
+
+    [phase]
+        id=reach_bridge
+        label="Доведите Каэла до восточного края моста (5, 3)"
+        when=unit_reaches
+        unit=kael
+        x=5
+        y=3
+        next=hold_bridge
+    [/phase]
+    [phase]
+        id=hold_bridge
+        label="Удерживайте Каэлом мост три хода или победите налётчиков"
+        when=turn_reached
+        unit=kael
+        x=5
+        y=3
+        turns=3
+        next=defeat_grom
+        advance_when_side_defeated=enemy
+        spawn_group=ambush
+        dialog=crossing_ambush
+    [/phase]
+    [phase]
+        id=defeat_grom
+        label="Победите Грома"
+        when=unit_defeated
+        unit=grom
+        result=victory
+        spawn_group=leader
+        dialog=crossing_leader
+        finish_dialog=crossing_victory
+    [/phase]
+
+    [objective]
+        result=defeat
+        when=unit_defeated
+        unit=kael
+        dialog=crossing_defeat
+    [/objective]
+    [objective]
+        result=defeat
+        when=turn_limit
+        turn=10
+        dialog=crossing_timeout
+    [/objective]
+[/scenario]

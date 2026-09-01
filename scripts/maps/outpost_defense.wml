@@ -1,0 +1,15 @@
+[map]
+    id=outpost_defense
+    width=11
+    height=8
+    data=<<
+forest,grassland,grassland,hills,grassland,grassland,hills,grassland,grassland,grassland,forest
+grassland,grassland,forest,grassland,village,grassland,forest,grassland,grassland,grassland,hills
+grassland,castle,castle,grassland,grassland,forest,grassland,grassland,castle,grassland,grassland
+grassland,keep,castle,grassland,grassland,village,grassland,grassland,castle,keep,grassland
+grassland,castle,castle,grassland,grassland,forest,grassland,grassland,castle,grassland,grassland
+forest,grassland,grassland,hills,grassland,grassland,hills,grassland,grassland,grassland,forest
+grassland,grassland,forest,grassland,village,grassland,forest,grassland,grassland,grassland,hills
+forest,grassland,grassland,grassland,hills,grassland,grassland,hills,grassland,grassland,forest
+    >>
+[/map]

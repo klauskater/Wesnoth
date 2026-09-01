@@ -1,0 +1,27 @@
+[dialog]
+    id=outpost_intro
+    [line]
+        speaker=eren
+        text="Застава окружена. Нанимай бойцов, пока я удерживаю крепость."
+    [/line]
+    [line]
+        speaker=eren
+        text="Победа будет нашей, когда падёт вражеский вождь."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=outpost_victory
+    [line]
+        speaker=eren
+        text="Вождь повержен. Застава устояла."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=outpost_defeat
+    [line]
+        speaker=krug
+        text="Их командир пал. Застава теперь наша."
+    [/line]
+[/dialog]

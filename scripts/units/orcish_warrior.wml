@@ -1,13 +1,16 @@
 [unit_type]
-    id=orcish_grunt
-    name="Орк-пехотинец"
-    max_hitpoints=38
+    id=orcish_warrior
+    name="Орк-воин"
+    max_hitpoints=52
     max_moves=5
-    cost=16
-    level=1
-    max_experience=40
-    advances_to=orcish_warrior
+    cost=30
+    level=2
+    max_experience=80
     alignment=chaotic
+
+    [ability]
+        id=steadfast
+    [/ability]
 
     [movement_costs]
         grassland=1
@@ -17,7 +20,6 @@
         keep=1
         village=1
     [/movement_costs]
-
     [defense]
         grassland=40
         forest=50
@@ -27,19 +29,23 @@
         keep=40
         village=40
     [/defense]
-
     [resistance]
-        blade=10
-        pierce=20
-        impact=0
+        blade=20
+        pierce=10
+        impact=10
     [/resistance]
-
     [attack]
         id=sword
-        name="Меч"
+        name="Большой меч"
         range=melee
         damage_type=blade
-        damage=9
-        strikes=2
+        damage=11
+        strikes=3
+        [special]
+            id=berserk
+        [/special]
+        [special]
+            id=poison
+        [/special]
     [/attack]
 [/unit_type]

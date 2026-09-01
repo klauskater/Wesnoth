@@ -1,0 +1,47 @@
+[dialog]
+    id=crossing_intro
+    [line]
+        speaker=kael
+        text="Нужно добраться до восточного края моста. Держитесь рядом."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=crossing_ambush
+    [line]
+        speaker=lyra
+        text="Засада! Удерживаем переправу три хода."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=crossing_leader
+    [line]
+        speaker=grom
+        text="Довольно прятаться. Я сам сброшу вас в реку!"
+    [/line]
+[/dialog]
+
+[dialog]
+    id=crossing_victory
+    [line]
+        speaker=kael
+        text="Командир повержен. Переправа наша."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=crossing_defeat
+    [line]
+        speaker=lyra
+        text="Каэл пал. Нам придётся отступить."
+    [/line]
+[/dialog]
+
+[dialog]
+    id=crossing_timeout
+    [line]
+        speaker=kael
+        text="Мы потеряли слишком много времени. Подошла вся орочья армия."
+    [/line]
+[/dialog]

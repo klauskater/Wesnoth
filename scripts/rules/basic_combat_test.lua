@@ -2,18 +2,28 @@ local combat = dofile("scripts/rules/basic_combat.lua")
 
 local units = {
     alice = {
-        id = "alice", hitpoints = 29, position = { x = 2, y = 2 },
-        defense = { grassland = 40 },
-        attacks = {{ id = "sword", range = "melee", damage = 5, strikes = 2 }},
+        id = "alice", side = "player", hitpoints = 29, attacks_left = 1,
+        movement_points = 6, position = { x = 2, y = 2 },
+        __children = {
+            defense = {{ grassland = 40 }}, resistance = {{ blade = 0 }},
+            attack = {{ id = "sword", range = "melee", damage_type = "blade", damage = 5, strikes = 2 }},
+        },
     },
     bob = {
-        id = "bob", hitpoints = 38, position = { x = 3, y = 2 },
-        defense = { grassland = 40 },
-        attacks = {{ id = "sword", range = "melee", damage = 9, strikes = 2 }},
+        id = "bob", side = "enemy", hitpoints = 38, attacks_left = 1,
+        movement_points = 5, position = { x = 3, y = 2 },
+        __children = {
+            defense = {{ grassland = 40 }}, resistance = {{ blade = 0 }},
+            attack = {{ id = "sword", range = "melee", damage_type = "blade", damage = 9, strikes = 2 }},
+        },
     },
 }
 
-local context = { objects = {}, map = {}, random = {} }
+local state = {
+    active_side = "player",
+    scenario = { __children = { objective = {} } },
+}
+local context = { objects = {}, map = {}, random = {}, state = {} }
 function context.objects:get(id)
     local source = units[id]
     if not source then return nil end
@@ -25,6 +35,8 @@ function context.objects:set(id, property, value) units[id][property] = value en
 function context.map:are_adjacent() return true end
 function context.map:get() return "grassland" end
 function context.random:integer() return 1 end
+function context.state:get(key) return state[key] end
+function context.state:set(key, value) state[key] = value end
 
 local result = combat.resolve(context, {
     attacker = "alice", defender = "bob", weapon = "sword",

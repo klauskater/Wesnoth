@@ -1,0 +1,61 @@
+[unit_type]
+    id=cockatrice
+    name="Василиск"
+    max_hitpoints=34
+    max_moves=6
+    cost=30
+    level=2
+    max_experience=80
+    alignment=chaotic
+
+    [movement_costs]
+        grassland=1
+        forest=2
+        hills=1
+        castle=1
+        keep=1
+        village=1
+    [/movement_costs]
+    [defense]
+        grassland=40
+        forest=50
+        hills=40
+        water=80
+        castle=40
+        keep=40
+        village=40
+    [/defense]
+    [resistance]
+        blade=10
+        pierce=10
+        impact=0
+    [/resistance]
+    [attack]
+        id=gaze
+        name="Каменный взгляд"
+        range=ranged
+        damage_type=impact
+        damage=1
+        strikes=4
+        [special]
+            id=magical
+        [/special]
+        [special]
+            id=petrify
+        [/special]
+    [/attack]
+    [attack]
+        id=shriek
+        name="Оглушающий крик"
+        range=ranged
+        damage_type=impact
+        damage=1
+        strikes=4
+        [special]
+            id=magical
+        [/special]
+        [special]
+            id=stun
+        [/special]
+    [/attack]
+[/unit_type]

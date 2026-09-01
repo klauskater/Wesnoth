@@ -1,13 +1,21 @@
 [unit_type]
-    id=orcish_grunt
-    name="Орк-пехотинец"
-    max_hitpoints=38
+    id=orcish_raider
+    name="Орк-налётчик"
+    max_hitpoints=24
     max_moves=5
-    cost=16
+    cost=12
     level=1
-    max_experience=40
-    advances_to=orcish_warrior
+    max_experience=24
+    advances_to=orcish_grunt
     alignment=chaotic
+
+    [ability]
+        id=skirmisher
+    [/ability]
+    [ability]
+        id=regenerates
+        value=4
+    [/ability]
 
     [movement_costs]
         grassland=1
@@ -29,17 +37,17 @@
     [/defense]
 
     [resistance]
-        blade=10
-        pierce=20
+        blade=0
+        pierce=-10
         impact=0
     [/resistance]
 
     [attack]
-        id=sword
-        name="Меч"
+        id=knife
+        name="Нож"
         range=melee
         damage_type=blade
-        damage=9
+        damage=2
         strikes=2
     [/attack]
 [/unit_type]

@@ -10,6 +10,7 @@
 ```lua
 context.map:get({ x = 2, y = 2 }) -> "grassland"
 context.map:are_adjacent(a, b) -> boolean
+context.map:neighbors(position) -> [{ x, y }]
 ```
 
 Операции проверяют границы карты. Движок не читает свойства типа местности и не
@@ -23,12 +24,13 @@ context.map:are_adjacent(a, b) -> boolean
 ```lua
 context.objects:get(id) -> snapshot | nil
 context.objects:set(id, property, value)
+context.objects:remove(id)
+context.objects:all() -> [snapshot]
 ```
 
 `get` возвращает снимок. Изменение снимка само по себе не меняет мир. `set`
-атомарно записывает одно WML-совместимое значение. В первом срезе правила
-изменяют только `hitpoints`.
+атомарно записывает одно WML-совместимое значение. `remove` атомарно удаляет
+объект; значение этой операции (смерть, уход или превращение) определяют Lua-правила.
 
 Хранилище гарантирует уникальность id и не допускает одновременную запись из
 двух выполняющихся команд. Смысл имён свойств движку неизвестен.
-

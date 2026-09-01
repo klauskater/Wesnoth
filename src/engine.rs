@@ -10,7 +10,7 @@ pub struct Position {
     pub y: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Map {
     pub width: usize,
     pub height: usize,
@@ -44,6 +44,13 @@ impl Map {
         let b = axial(b);
         ((a.0 - b.0).abs() + (a.1 - b.1).abs() + (a.2 - b.2).abs()) / 2 == 1
     }
+
+    pub fn neighbors(&self, position: Position) -> Vec<Position> {
+        (1..=self.height as i64)
+            .flat_map(|y| (1..=self.width as i64).map(move |x| Position { x, y }))
+            .filter(|candidate| self.are_adjacent(position, *candidate))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +71,7 @@ impl Object {
 pub struct World {
     pub map: Map,
     pub objects: BTreeMap<String, Object>,
+    pub state: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +102,7 @@ struct Transaction {
     random: DeterministicRandom,
 }
 
+#[derive(Clone)]
 pub struct Engine {
     pub world: World,
     random: DeterministicRandom,
@@ -125,7 +134,7 @@ impl Engine {
         let context = create_context(&lua, Rc::clone(&transaction)).map_err(|e| e.to_string())?;
         let module: Table = lua
             .load(&self.rule_source)
-            .set_name("basic_combat.lua")
+            .set_name("scenario_rules.lua")
             .eval()
             .map_err(|error| error.to_string())?;
         let resolve: mlua::Function = module.get(function).map_err(|e| e.to_string())?;
@@ -173,7 +182,88 @@ fn create_context(lua: &Lua, transaction: Rc<RefCell<Transaction>>) -> mlua::Res
             },
         )?,
     )?;
+    let state = Rc::clone(&transaction);
+    objects.set(
+        "add",
+        lua.create_function(move |_lua, (_self, value): (Table, mlua::Value)| {
+            let Value::Map(mut properties) = Value::from_lua(value)? else {
+                return Err(mlua::Error::runtime("object must be a map"));
+            };
+            let Some(Value::String(id)) = properties.remove("id") else {
+                return Err(mlua::Error::runtime("object must have a string id"));
+            };
+            let mut state = state.borrow_mut();
+            if state.world.objects.contains_key(&id) {
+                return Err(mlua::Error::runtime(format!("duplicate object id: {id}")));
+            }
+            state
+                .world
+                .objects
+                .insert(id.clone(), Object { id, properties });
+            Ok(())
+        })?,
+    )?;
+    let state = Rc::clone(&transaction);
+    objects.set(
+        "remove",
+        lua.create_function(move |_lua, (_self, id): (Table, String)| {
+            state
+                .borrow_mut()
+                .world
+                .objects
+                .remove(&id)
+                .map(|_| ())
+                .ok_or_else(|| mlua::Error::runtime(format!("unknown object: {id}")))
+        })?,
+    )?;
+    let state = Rc::clone(&transaction);
+    objects.set(
+        "all",
+        lua.create_function(move |lua, _self: Table| {
+            Value::List(
+                state
+                    .borrow()
+                    .world
+                    .objects
+                    .values()
+                    .map(Object::snapshot)
+                    .collect(),
+            )
+            .to_lua(lua)
+        })?,
+    )?;
     context.set("objects", objects)?;
+
+    let state_api = lua.create_table()?;
+    let state = Rc::clone(&transaction);
+    state_api.set(
+        "get",
+        lua.create_function(move |lua, (_self, key): (Table, String)| {
+            state
+                .borrow()
+                .world
+                .state
+                .get(&key)
+                .cloned()
+                .unwrap_or(Value::Nil)
+                .to_lua(lua)
+        })?,
+    )?;
+    let state = Rc::clone(&transaction);
+    state_api.set(
+        "set",
+        lua.create_function(
+            move |_lua, (_self, key, value): (Table, String, mlua::Value)| {
+                state
+                    .borrow_mut()
+                    .world
+                    .state
+                    .insert(key, Value::from_lua(value)?);
+                Ok(())
+            },
+        )?,
+    )?;
+    context.set("state", state_api)?;
 
     let map = lua.create_table()?;
     let state = Rc::clone(&transaction);
@@ -199,6 +289,26 @@ fn create_context(lua: &Lua, transaction: Rc<RefCell<Transaction>>) -> mlua::Res
                 .world
                 .map
                 .are_adjacent(read_position(&a)?, read_position(&b)?))
+        })?,
+    )?;
+    let state = Rc::clone(&transaction);
+    map.set(
+        "neighbors",
+        lua.create_function(move |lua, (_self, position): (Table, Table)| {
+            let neighbors = state
+                .borrow()
+                .world
+                .map
+                .neighbors(read_position(&position)?)
+                .into_iter()
+                .map(|position| {
+                    Value::Map(BTreeMap::from([
+                        ("x".into(), Value::Integer(position.x)),
+                        ("y".into(), Value::Integer(position.y)),
+                    ]))
+                })
+                .collect();
+            Value::List(neighbors).to_lua(lua)
         })?,
     )?;
     context.set("map", map)?;

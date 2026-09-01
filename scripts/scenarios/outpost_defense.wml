@@ -1,0 +1,109 @@
+[scenario]
+    id=outpost_defense
+    name="Оборона заставы"
+    objective="Нанимайте бойцов и победите вражеского вождя"
+    random_seed=11
+    base_income=2
+    village_income=3
+    village_support=1
+    village_heal=8
+
+    [resources]
+        map=maps/outpost_defense.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/elvish_archer.wml,units/elvish_marksman.wml,units/elvish_ranger.wml,units/elvish_fighter.wml,units/elvish_hero.wml,units/orcish_raider.wml,units/orcish_grunt.wml,units/orcish_warrior.wml
+        dialogs=dialogs/outpost_defense.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+
+    on_start_dialog=outpost_intro
+
+    [side]
+        id=player
+        controller=human
+        gold=45
+        recruit=elvish_fighter,elvish_archer
+        [recruit_hex]
+            x=2
+            y=3
+        [/recruit_hex]
+        [recruit_hex]
+            x=3
+            y=3
+        [/recruit_hex]
+        [recruit_hex]
+            x=3
+            y=4
+        [/recruit_hex]
+        [recruit_hex]
+            x=2
+            y=5
+        [/recruit_hex]
+        [recruit_hex]
+            x=3
+            y=5
+        [/recruit_hex]
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+        gold=0
+    [/side]
+
+    [unit]
+        id=eren
+        type=elvish_archer
+        side=player
+        is_leader=yes
+        x=2
+        y=4
+    [/unit]
+    [unit]
+        id=krug
+        type=orcish_grunt
+        side=enemy
+        is_leader=yes
+        x=10
+        y=4
+    [/unit]
+    [unit]
+        id=raider_one
+        type=orcish_raider
+        side=enemy
+        x=9
+        y=3
+    [/unit]
+    [unit]
+        id=raider_two
+        type=orcish_raider
+        side=enemy
+        x=9
+        y=5
+    [/unit]
+
+    [village]
+        x=5
+        y=2
+    [/village]
+    [village]
+        x=6
+        y=4
+    [/village]
+    [village]
+        x=5
+        y=7
+    [/village]
+
+    [objective]
+        result=victory
+        when=unit_defeated
+        unit=krug
+        dialog=outpost_victory
+    [/objective]
+    [objective]
+        result=defeat
+        when=unit_defeated
+        unit=eren
+        dialog=outpost_defeat
+    [/objective]
+[/scenario]
