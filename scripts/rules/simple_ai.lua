@@ -10,7 +10,8 @@ local function hex_distance(a, b)
     return (math.abs(aq - bq) + math.abs(ar - br) + math.abs(as - bs)) / 2
 end
 
-local function simple_ai_turn(rules, context, side)
+local function simple_ai_turn(rules, context, side_config)
+    local side = side_config.id
     local events = {}
     for _, unit in ipairs(context.objects:all()) do
         if unit.side == side and unit.hitpoints > 0
@@ -24,7 +25,8 @@ local function simple_ai_turn(rules, context, side)
                 end
             end
             if target then
-                if not context.map:are_adjacent(unit.position, target.position) then
+                local passive = side_config.passive_leader == "yes" and unit.is_leader == "yes"
+                if not passive and not context.map:are_adjacent(unit.position, target.position) then
                     local best
                     for _, cell in ipairs(rules.reachable(context, { object = unit.id })) do
                         if not best or hex_distance(cell.position, target.position)

@@ -1,0 +1,50 @@
+[dialog]
+    id=rooting_intro
+    [line]
+        speaker=Baran
+        text="Приветствую тебя, брат. Тёмный маг Мордак и его создания разоряют Магре."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Ты позвал — я пришёл. Я отвлеку его войска, пока ты готовишь удар."
+    [/line]
+    [line]
+        speaker=Baran
+        text="Он укрылся к северу отсюда. Береги людей и покончи с ним."
+    [/line]
+[/dialog]
+[dialog]
+    id=rooting_turn_6
+    [line]
+        speaker=Arvith
+        text="Баран уже должен быть на месте. Нажмём сильнее и отвлечём мага!"
+    [/line]
+[/dialog]
+[dialog]
+    id=rooting_turn_10
+    [line]
+        speaker=Arvith
+        text="Баран так и не атаковал. Что-то случилось, но теперь Мордака придётся одолеть нам."
+    [/line]
+[/dialog]
+[dialog]
+    id=rooting_victory
+    [line]
+        speaker=Arvith
+        text="Мордак повержен. Но разведчики видели, как Барана увезли дальше на север. В погоню!"
+    [/line]
+[/dialog]
+[dialog]
+    id=rooting_defeat
+    [line]
+        speaker=Arvith
+        text="Без меня Магре не устоит..."
+    [/line]
+[/dialog]
+[dialog]
+    id=rooting_time_over
+    [line]
+        speaker=Mordak
+        text="План твоего брата провалился. Теперь он мой пленник, а мои войска идут к деревне."
+    [/line]
+[/dialog]

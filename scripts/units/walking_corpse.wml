@@ -1,0 +1,41 @@
+[unit_type]
+    id=walking_corpse
+    name="Ходячий труп"
+    max_hitpoints=20
+    max_moves=4
+    cost=8
+    level=0
+    max_experience=24
+    advances_to=
+    alignment=chaotic
+    [movement_costs]
+        grassland=1
+        forest=2
+        hills=2
+        castle=1
+        keep=1
+        village=1
+    [/movement_costs]
+    [defense]
+        grassland=60
+        forest=50
+        hills=50
+        water=80
+        castle=50
+        keep=50
+        village=50
+    [/defense]
+    [resistance]
+        blade=0
+        pierce=20
+        impact=-20
+    [/resistance]
+    [attack]
+        id=touch
+        name="Удар"
+        range=melee
+        damage_type=impact
+        damage=6
+        strikes=2
+    [/attack]
+[/unit_type]

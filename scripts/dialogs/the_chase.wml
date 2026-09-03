@@ -1,0 +1,58 @@
+[dialog]
+    id=chase_intro
+    [line]
+        speaker=Arvith
+        text="Три дня мы шли по следу похитителей. Он ведёт прямо в Серый лес."
+    [/line]
+    [line]
+        speaker=Nil-Galion
+        text="Стойте! Пленник занимался некромантией. Мы не позволим вам пройти через наши земли."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Мы сами убили некроманта. Эльфы меня не остановят — я найду брата."
+    [/line]
+[/dialog]
+[dialog]
+    id=kidnappers_found
+    [line]
+        speaker=Arvith
+        text="Я вижу их! Вот настоящие некроманты!"
+    [/line]
+    [line]
+        speaker=Muff_Toras
+        text="Проклятье! Ещё несколько часов — и наш след исчез бы. Поднимайтесь, мёртвые!"
+    [/line]
+[/dialog]
+[dialog]
+    id=chase_turn_12
+    [line]
+        speaker=Arvith
+        text="Вперёд! Мы должны настичь похитителей, пока след не остыл."
+    [/line]
+[/dialog]
+[dialog]
+    id=chase_victory
+    [line]
+        speaker=Muff_Toras
+        text="Твой брат уже в замке нашего хозяина, в трёх днях пути на северо-восток."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Свяжите его. Мы отправляемся к замку."
+    [/line]
+[/dialog]
+[dialog]
+    id=chase_defeat
+    [line]
+        speaker=Arvith
+        text="Теперь мне уже не спасти Барана..."
+    [/line]
+[/dialog]
+[dialog]
+    id=chase_time_over
+    [line]
+        speaker=Arvith
+        text="Мы потеряли слишком много времени. След похитителей исчез."
+    [/line]
+[/dialog]

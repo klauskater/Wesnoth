@@ -1,0 +1,15 @@
+[map]
+    id=rooting_out_a_mage
+    width=11
+    height=8
+    data=<<
+forest,hills,hills,grassland,grassland,grassland,hills,hills,forest,forest,forest
+forest,grassland,grassland,grassland,village,grassland,grassland,grassland,castle,castle,hills
+grassland,grassland,forest,grassland,grassland,forest,grassland,grassland,castle,castle,grassland
+grassland,village,grassland,grassland,hills,grassland,village,grassland,castle,keep,grassland
+grassland,castle,castle,grassland,grassland,forest,grassland,grassland,castle,castle,grassland
+forest,castle,keep,castle,grassland,grassland,hills,grassland,grassland,village,forest
+forest,castle,castle,grassland,village,forest,grassland,grassland,hills,forest,forest
+forest,forest,grassland,grassland,grassland,grassland,forest,forest,hills,hills,forest
+    >>
+[/map]

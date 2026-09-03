@@ -26,6 +26,22 @@ fn outpost() -> Game {
     .unwrap()
 }
 
+fn rooting_out_a_mage() -> Game {
+    Game::load(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
+        "scenarios/rooting_out_a_mage.wml",
+    )
+    .unwrap()
+}
+
+fn the_chase() -> Game {
+    Game::load(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
+        "scenarios/the_chase.wml",
+    )
+    .unwrap()
+}
+
 fn recruit(unit_type: &str) -> Value {
     Value::Map(BTreeMap::from([(
         "unit_type".into(),
@@ -917,4 +933,196 @@ fn outpost_village_capture_adds_income_and_heals_the_garrison() {
         event.get("type").and_then(Value::as_str) == Some("unit_healed")
             && event.get("unit").and_then(Value::as_str) == Some(fighter.as_str())
     }));
+}
+
+#[test]
+fn adapted_two_brothers_runs_story_milestones_and_turn_limit() {
+    let mut game = rooting_out_a_mage();
+    assert_eq!(game.id, "01_rooting_out_a_mage");
+    assert_eq!(game.dialog(&game.start_dialog).unwrap().len(), 3);
+    game.acknowledge_dialog().unwrap();
+
+    let Value::List(objects) = game.snapshot().unwrap().objects else {
+        panic!("snapshot objects must be a list")
+    };
+    assert!(
+        objects
+            .iter()
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Arvith"))
+    );
+    assert!(
+        objects
+            .iter()
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Mordak"))
+    );
+
+    let mut scheduled = None;
+    for _ in 1..6 {
+        let events = game.execute("end_turn", Value::Nil).unwrap();
+        scheduled = scheduled.or_else(|| {
+            events
+                .into_iter()
+                .find(|event| event.get("type").and_then(Value::as_str) == Some("turn_event"))
+        });
+    }
+    let scheduled = scheduled.expect("turn six must fire its story event");
+    assert_eq!(
+        scheduled.get("id").and_then(Value::as_str),
+        Some("baran_ready")
+    );
+    assert_eq!(scheduled.get("turn"), Some(&Value::Integer(6)));
+    game.acknowledge_dialog().unwrap();
+
+    let mut turn_ten = None;
+    for _ in 6..10 {
+        let events = game.execute("end_turn", Value::Nil).unwrap();
+        turn_ten = turn_ten.or_else(|| {
+            events
+                .into_iter()
+                .find(|event| event.get("id").and_then(Value::as_str) == Some("baran_missing"))
+        });
+    }
+    assert!(turn_ten.is_some());
+    game.acknowledge_dialog().unwrap();
+
+    let mut ending = None;
+    for _ in 10..19 {
+        let events = game.execute("end_turn", Value::Nil).unwrap();
+        ending = ending.or_else(|| {
+            events.into_iter().find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("scenario_finished")
+            })
+        });
+    }
+    let ending = ending.expect("turn 19 must apply the 18-turn limit");
+    assert_eq!(ending.get("result").and_then(Value::as_str), Some("defeat"));
+}
+
+#[test]
+fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
+    let mut first = rooting_out_a_mage();
+    first.acknowledge_dialog().unwrap();
+    first.execute("recruit", recruit("spearman")).unwrap();
+    let state = first.campaign_state().unwrap();
+    let veteran = state
+        .units
+        .iter()
+        .find(|unit| unit.get("id").and_then(Value::as_str) == Some("player_spearman_1"))
+        .unwrap();
+    assert_eq!(
+        veteran.get("type").and_then(Value::as_str),
+        Some("spearman")
+    );
+
+    let mut second = Game::load_with_campaign(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
+        "scenarios/the_chase.wml",
+        Some(&state),
+    )
+    .unwrap();
+    second.acknowledge_dialog().unwrap();
+    let recalled = second
+        .execute(
+            "recall",
+            Value::Map(BTreeMap::from([
+                ("unit".into(), Value::String("player_spearman_1".into())),
+                (
+                    "destination".into(),
+                    Value::Map(BTreeMap::from([
+                        ("x".into(), Value::Integer(2)),
+                        ("y".into(), Value::Integer(9)),
+                    ])),
+                ),
+            ])),
+        )
+        .unwrap();
+    assert_eq!(
+        recalled[0].get("type").and_then(Value::as_str),
+        Some("unit_recalled")
+    );
+    let Value::List(objects) = second.snapshot().unwrap().objects else {
+        panic!()
+    };
+    assert!(
+        objects
+            .iter()
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("player_spearman_1"))
+    );
+}
+
+#[test]
+fn adapted_chase_starts_with_hidden_kidnappers_in_reserve() {
+    let game = the_chase();
+    assert_eq!(game.id, "02_the_chase");
+    let Value::List(objects) = game.snapshot().unwrap().objects else {
+        panic!()
+    };
+    assert!(
+        objects
+            .iter()
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Nil-Galion"))
+    );
+    assert!(
+        !objects
+            .iter()
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Muff_Toras"))
+    );
+}
+
+#[test]
+fn reaching_the_north_of_the_woods_reveals_the_kidnappers() {
+    let mut game = the_chase();
+    game.acknowledge_dialog().unwrap();
+    let mut revealed = false;
+    for _ in 0..5 {
+        let actions = game
+            .query(
+                "actions",
+                Value::Map(BTreeMap::from([(
+                    "object".into(),
+                    Value::String("Arvith".into()),
+                )])),
+            )
+            .unwrap();
+        let Value::List(cells) = actions.get("reachable").unwrap() else {
+            panic!()
+        };
+        let destination = cells
+            .iter()
+            .min_by_key(|cell| {
+                let position = cell.get("position").unwrap();
+                (position.get("x").and_then(Value::as_i64).unwrap() - 6).abs()
+                    + (position.get("y").and_then(Value::as_i64).unwrap() - 2).abs()
+            })
+            .unwrap()
+            .get("position")
+            .unwrap()
+            .clone();
+        let events = game
+            .execute(
+                "move",
+                Value::Map(BTreeMap::from([
+                    ("object".into(), Value::String("Arvith".into())),
+                    ("destination".into(), destination),
+                ])),
+            )
+            .unwrap();
+        if events
+            .iter()
+            .any(|event| event.get("type").and_then(Value::as_str) == Some("phase_changed"))
+        {
+            revealed = true;
+            break;
+        }
+        game.execute("end_turn", Value::Nil).unwrap();
+    }
+    assert!(revealed);
+    let Value::List(objects) = game.snapshot().unwrap().objects else {
+        panic!()
+    };
+    assert!(
+        objects
+            .iter()
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Muff_Toras"))
+    );
 }

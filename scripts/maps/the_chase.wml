@@ -1,0 +1,17 @@
+[map]
+    id=the_chase
+    width=11
+    height=10
+    data=<<
+hills,forest,forest,forest,grassland,grassland,forest,forest,castle,keep,castle
+forest,forest,hills,forest,grassland,village,grassland,forest,castle,castle,forest
+forest,grassland,forest,forest,grassland,grassland,forest,forest,grassland,forest,forest
+forest,village,forest,hills,forest,grassland,village,forest,hills,forest,forest
+forest,grassland,forest,grassland,grassland,forest,grassland,forest,grassland,village,forest
+forest,hills,forest,grassland,village,grassland,forest,grassland,forest,grassland,forest
+forest,forest,grassland,grassland,forest,hills,grassland,forest,grassland,forest,forest
+forest,grassland,forest,village,grassland,grassland,forest,grassland,hills,forest,forest
+forest,castle,castle,grassland,forest,grassland,village,forest,grassland,forest,hills
+castle,keep,castle,forest,grassland,grassland,forest,forest,forest,hills,hills
+    >>
+[/map]

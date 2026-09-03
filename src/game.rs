@@ -31,8 +31,23 @@ pub struct GameSnapshot {
     pub objects: Value,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CampaignState {
+    pub units: Vec<Value>,
+    pub gold: i64,
+    pub variables: BTreeMap<String, Value>,
+}
+
 impl Game {
     pub fn load(scripts: impl AsRef<Path>, scenario_path: &str) -> Result<Self, String> {
+        Self::load_with_campaign(scripts, scenario_path, None)
+    }
+
+    pub fn load_with_campaign(
+        scripts: impl AsRef<Path>,
+        scenario_path: &str,
+        campaign: Option<&CampaignState>,
+    ) -> Result<Self, String> {
         let scripts = scripts.as_ref();
         let scenario_document = read_wml(&scripts.join(scenario_path))?;
         let scenario = one_root(&scenario_document, "scenario")?;
@@ -76,11 +91,32 @@ impl Game {
                 return Err(format!("duplicate object id: {id}"));
             }
             let type_id = unit.attribute("type")?;
-            let mut properties = types
+            let carried = campaign.and_then(|state| {
+                state.units.iter().find_map(|unit| {
+                    (unit.get("id").and_then(Value::as_str) == Some(&id))
+                        .then(|| unit.as_map().cloned())
+                        .flatten()
+                })
+            });
+            let mut properties = carried
+                .clone()
+                .unwrap_or_else(|| types.get(type_id).cloned().unwrap_or_default());
+            if properties.is_empty() {
+                return Err(format!("unknown unit type: {type_id}"));
+            }
+            properties.remove("id");
+            let scenario_properties = types
                 .get(type_id)
                 .cloned()
                 .ok_or_else(|| format!("unknown unit type: {type_id}"))?;
-            properties.extend(node_properties(unit));
+            for (key, value) in scenario_properties {
+                properties.entry(key).or_insert(value);
+            }
+            let mut scenario_properties = node_properties(unit);
+            if carried.is_some() {
+                scenario_properties.remove("type");
+            }
+            properties.extend(scenario_properties);
             objects.insert(id.clone(), Object { id, properties });
         }
 
@@ -100,19 +136,48 @@ impl Game {
                 .map(|(id, properties)| (id.clone(), Value::Map(properties.clone())))
                 .collect(),
         );
+        let recall = campaign.map_or_else(Vec::new, |state| {
+            state
+                .units
+                .iter()
+                .filter(|unit| {
+                    let id = unit.get("id").and_then(Value::as_str);
+                    id.is_some_and(|id| !objects.contains_key(id))
+                })
+                .cloned()
+                .collect()
+        });
+        let mut initial_state = BTreeMap::from([
+            ("scenario".into(), Value::Map(node_properties(scenario))),
+            ("unit_types".into(), unit_types),
+            ("recall".into(), Value::List(recall)),
+        ]);
+        if let Some(campaign) = campaign {
+            initial_state.extend(campaign.variables.clone());
+        }
         let mut engine = Engine::new(
             World {
                 map,
                 objects,
-                state: BTreeMap::from([
-                    ("scenario".into(), Value::Map(node_properties(scenario))),
-                    ("unit_types".into(), unit_types),
-                ]),
+                state: initial_state,
             },
             seed,
             rule_source,
         );
         engine.execute("initialize", Value::Nil)?;
+        if let (Some(campaign), Some(side)) = (campaign, scenario.attributes.get("campaign_side")) {
+            let key = format!("gold:{side}");
+            let starting = engine
+                .world
+                .state
+                .get(&key)
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            engine
+                .world
+                .state
+                .insert(key, Value::Integer(starting.max(campaign.gold)));
+        }
 
         Ok(Self {
             id: scenario.attribute("id")?.into(),
@@ -121,6 +186,56 @@ impl Game {
             engine,
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
+        })
+    }
+
+    pub fn campaign_state(&self) -> Result<CampaignState, String> {
+        let scenario = self.engine.world.state["scenario"].as_map().unwrap();
+        let side = scenario
+            .get("campaign_side")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "scenario has no campaign_side".to_owned())?;
+        let units = self
+            .engine
+            .world
+            .objects
+            .values()
+            .filter(|object| object.properties.get("side").and_then(Value::as_str) == Some(side))
+            .map(|object| {
+                let mut values = object.properties.clone();
+                values.insert("id".into(), Value::String(object.id.clone()));
+                Value::Map(values)
+            })
+            .chain(match self.engine.world.state.get("recall") {
+                Some(Value::List(units)) => units.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        let percentage = scenario
+            .get("carryover_percentage")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let gold = self
+            .engine
+            .world
+            .state
+            .get(&format!("gold:{side}"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            * percentage
+            / 100;
+        let variables = self
+            .engine
+            .world
+            .state
+            .iter()
+            .filter(|(key, _)| key.starts_with("campaign:"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        Ok(CampaignState {
+            units,
+            gold,
+            variables,
         })
     }
 

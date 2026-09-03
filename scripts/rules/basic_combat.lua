@@ -216,10 +216,25 @@ end
 
 local function finished(context, result, dialog)
     context.state:set("finished", true)
-    return { type = "scenario_finished", result = result, dialog = dialog }
+    return {
+        type = "scenario_finished",
+        result = result,
+        dialog = dialog,
+        next_scenario = result == "victory" and scenario(context).next_scenario or nil,
+    }
 end
 
-local function objective_event(context, defeated)
+local function turn_event(context, turn)
+    for _, event in ipairs(children(scenario(context), "turn_event")) do
+        local key = "turn_event:" .. (event.id or tostring(event.turn))
+        if event.turn == turn and not context.state:get(key) then
+            context.state:set(key, true)
+            return { type = "turn_event", turn = turn, id = event.id, dialog = event.dialog }
+        end
+    end
+end
+
+local function objective_event(context, defeated, killer)
     for _, objective in ipairs(children(scenario(context), "objective")) do
         local matched = false
         if objective.when == "side_defeated" then
@@ -236,6 +251,12 @@ local function objective_event(context, defeated)
             matched = context.state:get("turn") > objective.turn
         end
         if matched then
+            if killer and objective.killer_variable then
+                context.state:set("campaign:" .. objective.killer_variable, killer)
+            end
+            for _, variable in ipairs(children(objective, "campaign_variable")) do
+                context.state:set("campaign:" .. variable.name, variable.value)
+            end
             return finished(context, objective.result, objective.dialog)
         end
     end
@@ -548,7 +569,8 @@ function combat.initialize(context)
         end
         occupied[key] = object.id
         context.objects:set(object.id, "position", position)
-        context.objects:set(object.id, "hitpoints", object.initial_hitpoints or assert(object.max_hitpoints))
+        context.objects:set(object.id, "hitpoints",
+            object.initial_hitpoints or object.hitpoints or assert(object.max_hitpoints))
         context.objects:set(object.id, "movement_points", assert(object.max_moves))
         context.objects:set(object.id, "attacks_left", 1)
         context.objects:set(object.id, "experience", object.experience or 0)
@@ -734,6 +756,49 @@ function combat.recruit(context, command)
     }
 end
 
+function combat.recall(context, command)
+    assert_playing(context)
+    assert_no_pending_advancement(context)
+    local side_id = active_side(context)
+    local side = side_config(context, side_id)
+    assert(side.controller == "human", "only a human side can recall")
+    local destination = assert(command.destination, "recall destination is required")
+    assert(context.map:get(destination) == "castle", "recall destination must be a castle")
+    assert(not occupied(context, destination), "recall destination is occupied")
+
+    local leader
+    for _, object in ipairs(context.objects:all()) do
+        if object.side == side_id and object.is_leader == "yes" then leader = object end
+    end
+    assert(leader and context.map:get(leader.position) == "keep",
+        "leader must stand on a keep")
+
+    local recall = context.state:get("recall") or {}
+    local found
+    for index, object in ipairs(recall) do
+        if object.id == command.unit then
+            found = table.remove(recall, index)
+            break
+        end
+    end
+    assert(found, "unknown recall unit: " .. tostring(command.unit))
+    local cost = scenario(context).recall_cost or 20
+    local gold = context.state:get("gold:" .. side_id)
+    assert(gold >= cost, "not enough gold")
+    found.side = side_id
+    found.x, found.y = destination.x, destination.y
+    found.position = destination
+    found.movement_points = 0
+    found.attacks_left = 0
+    context.objects:add(found)
+    context.state:set("recall", recall)
+    context.state:set("gold:" .. side_id, gold - cost)
+    return {
+        type = "unit_recalled", unit = found.id, position = destination,
+        cost = cost, gold = gold - cost,
+    }
+end
+
 
 function combat.advance(context, command)
     local pending = assert(context.state:get("pending_advancement"),
@@ -864,6 +929,7 @@ function combat.resolve(context, command)
     end
     if result.defeated then
         local defeated = assert(context.objects:get(result.defeated))
+        local killer = defeated.id == defender.id and attacker or defender
         local events = {
             result,
             {
@@ -875,7 +941,7 @@ function combat.resolve(context, command)
         }
         context.objects:remove(defeated.id)
         for _, event in ipairs(advancements) do events[#events + 1] = event end
-        local ending = objective_event(context, defeated.id)
+        local ending = objective_event(context, defeated.id, killer.id)
         local current = phase(context)
         if not ending and current then
             if current.when == "unit_defeated" and current.unit == defeated.id then
@@ -1002,7 +1068,7 @@ function combat.end_turn(context)
         events[#events + 1] = { type = "turn_started", turn = context.state:get("turn"), side = side.id }
         for _, event in ipairs(start_side(context, side.id)) do events[#events + 1] = event end
         if side.controller == "ai" then
-            for _, event in ipairs(simple_ai_turn(combat, context, side.id)) do
+            for _, event in ipairs(simple_ai_turn(combat, context, side)) do
                 events[#events + 1] = event
                 if event.type == "scenario_finished" then return events end
             end
@@ -1015,6 +1081,8 @@ function combat.end_turn(context)
     context.state:set("active_side", current)
     events[#events + 1] = { type = "turn_started", turn = turn, side = current }
     for _, event in ipairs(start_side(context, current)) do events[#events + 1] = event end
+    local scheduled = turn_event(context, turn)
+    if scheduled then events[#events + 1] = scheduled end
     local ending = objective_event(context)
     if ending then
         events[#events + 1] = ending
@@ -1082,7 +1150,9 @@ function combat.move(context, command)
         stopped_by_zoc = destination.zoc,
     }
     local current = phase(context)
-    if current and current.when == "unit_reaches" and current.unit == object.id
+    if current and current.when == "unit_reaches"
+        and (not current.unit or current.unit == object.id)
+        and (not current.side or current.side == object.side)
         and current.x == command.destination.x and current.y == command.destination.y then
         local events = { event }
         if capture then events[#events + 1] = capture end

@@ -10,10 +10,12 @@ use wesnoth_engine::{
 const HEX_RADIUS: f32 = 38.0;
 const MAP_ORIGIN: Vec2 = vec2(65.0, 75.0);
 const PANEL_X: f32 = 800.0;
-const SCENARIOS: [&str; 3] = [
+const SCENARIOS: [&str; 5] = [
     "scenarios/first_battle.wml",
     "scenarios/crossing.wml",
     "scenarios/outpost_defense.wml",
+    "scenarios/rooting_out_a_mage.wml",
+    "scenarios/the_chase.wml",
 ];
 
 struct DialogView {
@@ -116,6 +118,10 @@ async fn main() {
             Some(1)
         } else if is_key_pressed(KeyCode::F3) {
             Some(2)
+        } else if is_key_pressed(KeyCode::F4) {
+            Some(3)
+        } else if is_key_pressed(KeyCode::F5) {
+            Some(4)
         } else if is_key_pressed(KeyCode::R) {
             Some(scenario_index)
         } else {
@@ -315,7 +321,7 @@ async fn main() {
         );
         text(
             &font,
-            "F1 battle | F2 crossing | F3 outpost | Q/W recruit | E end turn | R restart",
+            "F1-F3 demos | F4 Two Brothers 1 | F5 Two Brothers 2 | Q/W recruit | E end turn | R restart",
             24.0,
             screen_height() - 25.0,
             22.0,
