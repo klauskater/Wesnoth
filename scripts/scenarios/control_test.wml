@@ -1,0 +1,104 @@
+[scenario]
+    id=control_test
+    name="Контроль точек"
+    objective="Удерживайте ключевые позиции"
+    random_seed=17
+    village_heal=8
+
+    [resources]
+        map=maps/outpost_defense.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/elvish_archer.wml,units/silver_mage.wml
+        dialogs=dialogs/outpost_defense.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+    on_start_dialog=outpost_intro
+
+    [side]
+        id=player
+        controller=human
+        team_name=good
+        gold=20
+    [/side]
+    [side]
+        id=allies
+        controller=ai
+        team_name=good
+    [/side]
+
+    [unit]
+        id=anchor
+        type=elvish_archer
+        side=player
+        is_leader=yes
+        extra_recruit=elvish_archer
+        x=2
+        y=4
+    [/unit]
+    [unit]
+        id=scout
+        type=elvish_archer
+        side=player
+        x=2
+        y=3
+    [/unit]
+    [unit]
+        id=remote
+        type=elvish_archer
+        side=player
+        is_leader=yes
+        extra_recruit=elvish_archer
+        x=10
+        y=4
+    [/unit]
+    [unit]
+        id=patient
+        type=elvish_archer
+        side=player
+        initial_hitpoints=10
+        x=5
+        y=2
+    [/unit]
+    [unit]
+        id=teleporter
+        type=silver_mage
+        side=player
+        x=5
+        y=7
+    [/unit]
+
+    [village]
+        x=5
+        y=2
+        side=allies
+    [/village]
+    [village]
+        x=6
+        y=4
+        side=player
+    [/village]
+    [village]
+        x=5
+        y=7
+        side=player
+    [/village]
+
+    [objective]
+        result=victory
+        when=locations_controlled
+        side=player
+        dialog=outpost_victory
+        [location]
+            x=2
+            y=4
+        [/location]
+        [location]
+            x=3
+            y=3
+        [/location]
+        [location]
+            x=5
+            y=2
+        [/location]
+    [/objective]
+[/scenario]

@@ -58,8 +58,8 @@
 
     [objective]
         result=victory
-        when=side_defeated
-        side=enemy
+        when=enemies_defeated
+        side=player
         dialog=first_battle_victory
     [/objective]
 

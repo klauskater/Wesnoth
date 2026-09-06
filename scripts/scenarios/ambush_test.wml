@@ -1,0 +1,37 @@
+[scenario]
+    id=ambush_test
+    name="Проверка засады"
+    objective="Обнаружьте следопыта"
+    random_seed=23
+    [resources]
+        map=maps/first_battle.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml
+        unit_types=units/silver_mage.wml,units/elvish_ranger.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+    on_start_dialog=first_battle_intro
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+    [/side]
+    [unit]
+        id=walker
+        type=silver_mage
+        side=player
+        max_moves=2
+        x=2
+        y=2
+    [/unit]
+    [unit]
+        id=ambusher
+        type=elvish_ranger
+        side=enemy
+        x=3
+        y=1
+    [/unit]
+[/scenario]

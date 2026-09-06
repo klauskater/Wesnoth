@@ -137,6 +137,11 @@
         killer_variable=who_slew_mordak
         dialog=rooting_victory
     [/objective]
+    [achievement]
+        id=golden_mage
+        when=victory
+        unless_state=recruited:player
+    [/achievement]
     [objective]
         result=defeat
         when=unit_defeated

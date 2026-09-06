@@ -1,0 +1,40 @@
+[scenario]
+    id=ai_time_test
+    name="Проверка времени суток для ИИ"
+    random_seed=31
+    on_start_dialog=first_battle_intro
+
+    [resources]
+        map=maps/first_battle.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml
+        unit_types=units/elvish_fighter.wml,units/orcish_grunt.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+        patience=3
+    [/side]
+
+    [unit]
+        id=target
+        type=orcish_grunt
+        side=player
+        x=2
+        y=2
+    [/unit]
+    [unit]
+        id=lawful_ai
+        type=elvish_fighter
+        side=enemy
+        alignment=lawful
+        x=3
+        y=2
+    [/unit]
+[/scenario]

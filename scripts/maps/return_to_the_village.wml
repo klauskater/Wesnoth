@@ -1,0 +1,17 @@
+[map]
+    id=return_to_the_village
+    width=14
+    height=10
+    data=<<
+hills,hills,forest,grassland,grassland,grassland,grassland,grassland,forest,hills,hills,grassland,grassland,grassland
+hills,forest,grassland,village,grassland,grassland,grassland,forest,grassland,grassland,castle,castle,castle,grassland
+forest,grassland,grassland,grassland,grassland,hills,grassland,grassland,village,grassland,castle,keep,castle,grassland
+grassland,grassland,village,grassland,hills,hills,grassland,forest,grassland,grassland,castle,castle,castle,grassland
+grassland,grassland,grassland,grassland,grassland,grassland,grassland,grassland,grassland,village,grassland,grassland,grassland,forest
+grassland,forest,grassland,village,grassland,grassland,hills,grassland,grassland,grassland,grassland,grassland,forest,hills
+grassland,grassland,grassland,grassland,forest,grassland,grassland,grassland,village,grassland,hills,grassland,grassland,hills
+grassland,castle,castle,castle,grassland,grassland,grassland,forest,grassland,grassland,grassland,grassland,hills,hills
+grassland,castle,keep,castle,grassland,village,grassland,grassland,grassland,grassland,forest,hills,hills,hills
+grassland,castle,castle,castle,grassland,grassland,grassland,grassland,forest,hills,hills,hills,hills,hills
+    >>
+[/map]

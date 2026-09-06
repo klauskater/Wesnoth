@@ -1,0 +1,71 @@
+[dialog]
+    id=village_intro
+    [line]
+        speaker=narrator
+        text="Из дневника Барана: плен закончился, но дорога домой не принесла облегчения. Над Магре стоял дым, а навстречу братьям бежали перепуганные жители."
+    [/line]
+    [line]
+        speaker=narrator
+        text="Братья возвращались в Магре примирившимися, но над родными холмами уже поднимался дым."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Вон деревня. Но эти люди не встречают нас — они бегут. К оружию!"
+    [/line]
+    [line]
+        speaker=Baran
+        text="Найдём старосту Хобана. Он расскажет, что здесь произошло."
+    [/line]
+[/dialog]
+[dialog]
+    id=baran_faces_tairach
+    [line]
+        speaker=Tairach
+        text="Сегодня ты заплатишь за моё изуродованное лицо, маг!"
+    [/line]
+    [line]
+        speaker=Baran
+        text="Я уже заплатил жизнями своих людей. Теперь я исправлю ту ошибку и закончу начатое."
+    [/line]
+[/dialog]
+[dialog]
+    id=village_besieged
+    [line]
+        speaker=Reeve_Hoban
+        text="Хорошо, что вы вернулись. После вашего ухода орки напали на Магре, и мы почти не можем больше держаться."
+    [/line]
+    [line]
+        speaker=Baran
+        text="Это Тарайх — военачальник из Тоэн Карика. Он пришёл за мной."
+    [/line]
+    [line]
+        speaker=Tairach
+        text="Маг, изуродовавший моё лицо! Сегодня вы оба умрёте!"
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Я буду правой рукой, а ты левой. Закончим начатое, брат."
+    [/line]
+[/dialog]
+[dialog]
+    id=village_victory
+    [line]
+        speaker=Arvith
+        text="Всё кончено. Хорошо было снова сражаться рядом с тобой, Баран."
+    [/line]
+    [line]
+        speaker=Baran
+        text="Многое разрушено, но мы восстановим Магре. Теперь мы снова братья."
+    [/line]
+    [line]
+        speaker=narrator
+        text="Арвит вернулся к своим дорогам, но пообещал откликнуться на сигнальный огонь. Баран остался восстанавливать Магре — уже не один."
+    [/line]
+[/dialog]
+[dialog]
+    id=village_defeat
+    [line]
+        speaker=narrator
+        text="Без одного из братьев Магре уже не спасти."
+    [/line]
+[/dialog]

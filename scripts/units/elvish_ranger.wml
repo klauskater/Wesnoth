@@ -10,6 +10,10 @@
     [ability]
         id=skirmisher
     [/ability]
+    [ability]
+        id=ambush
+        terrain=forest
+    [/ability]
     [movement_costs]
         grassland=1
         forest=1

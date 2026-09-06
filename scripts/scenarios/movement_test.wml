@@ -1,0 +1,26 @@
+[scenario]
+    id=movement_test
+    name="Проверка движения"
+    objective="Проверьте дорогую местность"
+    random_seed=19
+    [resources]
+        map=maps/first_battle.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml
+        unit_types=units/silver_mage.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+    on_start_dialog=first_battle_intro
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [unit]
+        id=walker
+        type=silver_mage
+        side=player
+        max_moves=2
+        x=2
+        y=2
+    [/unit]
+[/scenario]

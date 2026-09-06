@@ -1,0 +1,44 @@
+[unit_type]
+    id=red_mage
+    name="Красный маг"
+    max_hitpoints=42
+    max_moves=5
+    cost=40
+    level=2
+    max_experience=90
+    advances_to=
+    alignment=neutral
+    [movement_costs]
+        grassland=1
+        forest=2
+        hills=2
+        castle=1
+        keep=1
+        village=1
+    [/movement_costs]
+    [defense]
+        grassland=50
+        forest=50
+        hills=50
+        water=80
+        castle=40
+        keep=40
+        village=40
+    [/defense]
+    [resistance]
+        blade=0
+        pierce=0
+        impact=10
+    [/resistance]
+    [attack]
+        id=fireball
+        name="Огненный шар"
+        range=ranged
+        damage_type=impact
+        damage=8
+        strikes=4
+        [special]
+            id=magical
+        [/special]
+    [/attack]
+[/unit_type]

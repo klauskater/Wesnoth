@@ -1,0 +1,108 @@
+[dialog]
+    id=castle_intro
+    [line]
+        speaker=narrator
+        text="Из дневника Ротарика: замок укреплён наскоро, орки стерегут ворота, а слуги собираются во внутреннем святилище. Но даже победа над всадником не спасёт от расплаты Тарайха."
+    [/line]
+    [line]
+        speaker=narrator
+        text="Отряд Арвита остановился перед тёмным замком. В тумане показались стражники."
+    [/line]
+    [line]
+        speaker=Guard_leader
+        text="Стой! Назови пароль."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Мафф Торас назвал нам оба пароля. Мы войдём прежде, чем обман раскроется."
+    [/line]
+[/dialog]
+[dialog]
+    id=first_password_prompt
+    [line]
+        speaker=Guard_leader
+        text="Стой! Свой или чужой? Назови первый пароль."
+    [/line]
+[/dialog]
+[dialog]
+    id=first_password_wrong
+    [line]
+        speaker=Guard_leader
+        text="Неверно! Это враги — к оружию!"
+    [/line]
+[/dialog]
+[dialog]
+    id=second_password_prompt
+    [line]
+        speaker=relief_leader
+        text="Вы наша смена? Тогда назовите второй пароль."
+    [/line]
+[/dialog]
+[dialog]
+    id=second_password_correct
+    [line]
+        speaker=relief_leader
+        text="Верно. Наконец-то мы можем уйти отсюда."
+    [/line]
+[/dialog]
+[dialog]
+    id=second_password_wrong
+    [line]
+        speaker=relief_leader
+        text="Это не наша смена! Держите самозванцев!"
+    [/line]
+[/dialog]
+[dialog]
+    id=treasury_found
+    [line]
+        speaker=Arvith
+        text="Здесь сундук — пятьдесят золотых. Они помогут освободить Барана."
+    [/line]
+[/dialog]
+[dialog]
+    id=altar_triggered
+    [line]
+        speaker=narrator
+        text="Камни у алтаря вспыхнули болезненно-зелёным светом. Древняя ловушка отравила того, кто подошёл слишком близко."
+    [/line]
+[/dialog]
+[dialog]
+    id=castle_entered
+    [line]
+        speaker=Guard_leader
+        text="Проходите. Пароль верный."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Пароли сработали. Ищите Барана и главаря некромантов."
+    [/line]
+[/dialog]
+[dialog]
+    id=baran_found
+    [line]
+        speaker=Baran
+        text="Арвит! Ротарик запер меня магическим ключом."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Ротарик мёртв, а ключ у меня. Я вытащу тебя отсюда."
+    [/line]
+[/dialog]
+[dialog]
+    id=castle_victory
+    [line]
+        speaker=Baran
+        text="Спасибо, что пришёл за мной. Возвращаемся в Магре."
+    [/line]
+    [line]
+        speaker=Arvith
+        text="Ты всё ещё мой брат. Я никогда не сомневался, что и ты пришёл бы за мной."
+    [/line]
+[/dialog]
+[dialog]
+    id=castle_defeat
+    [line]
+        speaker=Rotharik
+        text="Ты опоздал. Твоего брата уже не спасти."
+    [/line]
+[/dialog]

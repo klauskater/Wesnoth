@@ -1,0 +1,48 @@
+[unit_type]
+    id=silver_mage
+    name="Серебряный маг"
+    max_hitpoints=36
+    max_moves=6
+    cost=48
+    level=3
+    max_experience=100
+    advances_to=
+    alignment=neutral
+    [ability]
+        id=teleport
+    [/ability]
+    [movement_costs]
+        grassland=1
+        forest=2
+        hills=2
+        water=3
+        castle=1
+        keep=1
+        village=1
+    [/movement_costs]
+    [defense]
+        grassland=50
+        forest=50
+        hills=50
+        water=80
+        castle=40
+        keep=40
+        village=40
+    [/defense]
+    [resistance]
+        blade=0
+        pierce=0
+        impact=10
+    [/resistance]
+    [attack]
+        id=missile
+        name="Магический снаряд"
+        range=ranged
+        damage_type=impact
+        damage=9
+        strikes=4
+        [special]
+            id=magical
+        [/special]
+    [/attack]
+[/unit_type]

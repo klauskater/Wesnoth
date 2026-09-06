@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use mlua::{Lua, LuaOptions, StdLib, Table};
+use serde::{Deserialize, Serialize};
 
 use crate::value::Value;
 
@@ -53,7 +54,7 @@ impl Map {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Object {
     pub id: String,
     pub properties: BTreeMap<String, Value>,
@@ -116,6 +117,25 @@ impl Engine {
             random: DeterministicRandom::new(seed),
             rule_source,
         }
+    }
+
+    pub(crate) fn saved_state(&self) -> (BTreeMap<String, Object>, BTreeMap<String, Value>, u64) {
+        (
+            self.world.objects.clone(),
+            self.world.state.clone(),
+            self.random.state,
+        )
+    }
+
+    pub(crate) fn restore_state(
+        &mut self,
+        objects: BTreeMap<String, Object>,
+        state: BTreeMap<String, Value>,
+        random_state: u64,
+    ) {
+        self.world.objects = objects;
+        self.world.state = state;
+        self.random.state = random_state;
     }
 
     pub fn execute(&mut self, function: &str, command: Value) -> Result<Value, String> {

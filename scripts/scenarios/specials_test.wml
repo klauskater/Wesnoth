@@ -30,9 +30,23 @@
         id=magic_target
         type=orcish_grunt
         side=enemy
+        initial_hitpoints=1
         x=3
         y=2
     [/unit]
+
+    [attack_event]
+        id=personal_attack_test
+        attacker=marksman
+        defender=magic_target
+        dialog=first_battle_victory
+    [/attack_event]
+    [achievement]
+        id=last_blow_test
+        when=unit_defeated
+        unit=magic_target
+        killer=marksman
+    [/achievement]
     [unit]
         id=fighter
         type=elvish_fighter
@@ -51,6 +65,7 @@
         id=grunt
         type=orcish_grunt
         side=player
+        initial_hitpoints=10
         x=5
         y=1
     [/unit]

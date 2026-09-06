@@ -1,0 +1,58 @@
+[scenario]
+    id=ai_objective_test
+    name="Проверка целей ИИ"
+    random_seed=37
+    on_start_dialog=first_battle_intro
+
+    [resources]
+        map=maps/outpost_defense.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/elvish_archer.wml,units/elvish_fighter.wml,units/orcish_grunt.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+        fog=yes
+        vision_radius=1
+    [/side]
+
+    [unit]
+        id=observer
+        type=orcish_grunt
+        side=player
+        x=11
+        y=8
+    [/unit]
+    [unit]
+        id=runner
+        type=elvish_fighter
+        side=enemy
+        x=1
+        y=2
+    [/unit]
+    [unit]
+        id=wounded
+        type=elvish_archer
+        side=enemy
+        initial_hitpoints=5
+        x=5
+        y=2
+    [/unit]
+
+    [objective]
+        result=victory
+        when=locations_controlled
+        side=enemy
+        [location]
+            x=7
+            y=2
+        [/location]
+    [/objective]
+[/scenario]

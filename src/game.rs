@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use crate::{
@@ -9,6 +9,19 @@ use crate::{
     value::Value,
     wml::{self, Node},
 };
+use serde::{Deserialize, Serialize};
+
+const SAVE_VERSION: u32 = 1;
+
+#[derive(Deserialize, Serialize)]
+struct SavedGame {
+    version: u32,
+    scenario_path: String,
+    objects: BTreeMap<String, Object>,
+    state: BTreeMap<String, Value>,
+    random_state: u64,
+    pending_dialog: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DialogLine {
@@ -23,6 +36,7 @@ pub struct Game {
     engine: Engine,
     dialogs: BTreeMap<String, Vec<DialogLine>>,
     pending_dialog: Option<String>,
+    scenario_path: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,16 +63,34 @@ impl Game {
         campaign: Option<&CampaignState>,
     ) -> Result<Self, String> {
         let scripts = scripts.as_ref();
-        let scenario_document = read_wml(&scripts.join(scenario_path))?;
+        Self::load_with_campaign_from(scenario_path, campaign, &|path| {
+            fs::read_to_string(scripts.join(path))
+                .map_err(|error| format!("cannot read {path}: {error}"))
+        })
+    }
+
+    pub fn load_from(
+        scenario_path: &str,
+        read: &impl Fn(&str) -> Result<String, String>,
+    ) -> Result<Self, String> {
+        Self::load_with_campaign_from(scenario_path, None, read)
+    }
+
+    pub fn load_with_campaign_from(
+        scenario_path: &str,
+        campaign: Option<&CampaignState>,
+        read: &impl Fn(&str) -> Result<String, String>,
+    ) -> Result<Self, String> {
+        let scenario_document = read_wml_from(scenario_path, read)?;
         let scenario = one_root(&scenario_document, "scenario")?;
         let resources = scenario.child("resources")?;
 
-        let map_document = read_wml(&resource_path(scripts, resources, "map")?)?;
+        let map_document = read_wml_from(resources.attribute("map")?, read)?;
         let map_node = one_root(&map_document, "map")?;
         let map = load_map(map_node)?;
         let mut map_objects = BTreeSet::new();
         for path in split_paths(resources.attribute("map_objects")?) {
-            let roots = read_wml(&scripts.join(path))?;
+            let roots = read_wml_from(path, read)?;
             let map_object = one_root(&roots, "map_object")?;
             let id = map_object.attribute("id")?.to_owned();
             if !map_objects.insert(id.clone()) {
@@ -73,7 +105,7 @@ impl Game {
 
         let mut types = BTreeMap::new();
         for path in split_paths(resources.attribute("unit_types")?) {
-            let roots = read_wml(&scripts.join(path))?;
+            let roots = read_wml_from(path, read)?;
             let unit_type = one_root(&roots, "unit_type")?;
             let id = unit_type.attribute("id")?.to_owned();
             if types
@@ -120,12 +152,9 @@ impl Game {
             objects.insert(id.clone(), Object { id, properties });
         }
 
-        let dialogs = load_dialogs(&read_wml(&resource_path(scripts, resources, "dialogs")?)?)?;
+        let dialogs = load_dialogs(&read_wml_from(resources.attribute("dialogs")?, read)?)?;
         let rule_source = split_paths(resources.attribute("rules")?)
-            .map(|path| {
-                fs::read_to_string(scripts.join(path))
-                    .map_err(|error| format!("cannot read Lua rule {path}: {error}"))
-            })
+            .map(read)
             .collect::<Result<Vec<_>, _>>()?
             .join("\n");
         let seed = parse_i64(scenario, "random_seed")? as u64;
@@ -186,7 +215,56 @@ impl Game {
             engine,
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
+            scenario_path: scenario_path.into(),
         })
+    }
+
+    pub fn save(&self) -> Result<String, String> {
+        let (objects, state, random_state) = self.engine.saved_state();
+        serde_json::to_string_pretty(&SavedGame {
+            version: SAVE_VERSION,
+            scenario_path: self.scenario_path.clone(),
+            objects,
+            state,
+            random_state,
+            pending_dialog: self.pending_dialog.clone(),
+        })
+        .map_err(|error| format!("cannot encode save: {error}"))
+    }
+
+    pub fn load_save(scripts: impl AsRef<Path>, source: &str) -> Result<Self, String> {
+        let saved: SavedGame =
+            serde_json::from_str(source).map_err(|error| format!("cannot decode save: {error}"))?;
+        if saved.version != SAVE_VERSION {
+            return Err(format!(
+                "unsupported save version: {} (expected {SAVE_VERSION})",
+                saved.version
+            ));
+        }
+        let mut game = Self::load(scripts, &saved.scenario_path)?;
+        game.engine
+            .restore_state(saved.objects, saved.state, saved.random_state);
+        game.pending_dialog = saved.pending_dialog;
+        Ok(game)
+    }
+
+    pub fn load_save_from(
+        source: &str,
+        read: &impl Fn(&str) -> Result<String, String>,
+    ) -> Result<Self, String> {
+        let saved: SavedGame =
+            serde_json::from_str(source).map_err(|error| format!("cannot decode save: {error}"))?;
+        if saved.version != SAVE_VERSION {
+            return Err(format!(
+                "unsupported save version: {} (expected {SAVE_VERSION})",
+                saved.version
+            ));
+        }
+        let mut game = Self::load_from(&saved.scenario_path, read)?;
+        game.engine
+            .restore_state(saved.objects, saved.state, saved.random_state);
+        game.pending_dialog = saved.pending_dialog;
+        Ok(game)
     }
 
     pub fn campaign_state(&self) -> Result<CampaignState, String> {
@@ -237,6 +315,15 @@ impl Game {
             gold,
             variables,
         })
+    }
+
+    pub fn next_scenario(&self) -> Option<&str> {
+        self.engine
+            .world
+            .state
+            .get("scenario")?
+            .get("next_scenario")?
+            .as_str()
     }
 
     pub fn dialog(&self, id: &str) -> Result<&[DialogLine], String> {
@@ -314,10 +401,11 @@ impl Game {
     }
 }
 
-fn read_wml(path: &Path) -> Result<Vec<Node>, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    wml::parse(&source).map_err(|error| format!("{}: {error}", path.display()))
+fn read_wml_from(
+    path: &str,
+    read: &impl Fn(&str) -> Result<String, String>,
+) -> Result<Vec<Node>, String> {
+    wml::parse(&read(path)?).map_err(|error| format!("{path}: {error}"))
 }
 
 fn one_root<'a>(nodes: &'a [Node], name: &str) -> Result<&'a Node, String> {
@@ -327,10 +415,6 @@ fn one_root<'a>(nodes: &'a [Node], name: &str) -> Result<&'a Node, String> {
         return Err(format!("expected one [{name}]"));
     }
     Ok(node)
-}
-
-fn resource_path(scripts: &Path, resources: &Node, name: &str) -> Result<PathBuf, String> {
-    Ok(scripts.join(resources.attribute(name)?))
 }
 
 fn split_paths(value: &str) -> impl Iterator<Item = &str> {
@@ -423,6 +507,7 @@ fn load_dialogs(nodes: &[Node]) -> Result<BTreeMap<String, Vec<DialogLine>>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn scripts() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts")

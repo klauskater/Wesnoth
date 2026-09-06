@@ -1,0 +1,16 @@
+[map]
+    id=guarded_castle
+    width=12
+    height=9
+    data=<<
+hills,hills,castle,castle,castle,castle,castle,castle,castle,castle,hills,hills
+hills,castle,castle,grassland,grassland,castle,grassland,grassland,castle,castle,castle,hills
+forest,castle,grassland,grassland,forest,castle,grassland,grassland,castle,keep,castle,forest
+forest,castle,grassland,hills,grassland,castle,grassland,forest,castle,castle,castle,forest
+grassland,castle,castle,castle,castle,castle,grassland,grassland,grassland,castle,grassland,grassland
+grassland,grassland,grassland,grassland,castle,castle,castle,castle,castle,castle,grassland,grassland
+forest,grassland,village,grassland,grassland,forest,grassland,village,grassland,grassland,forest,forest
+hills,grassland,castle,castle,grassland,grassland,grassland,grassland,castle,castle,grassland,hills
+hills,grassland,castle,keep,castle,grassland,grassland,castle,castle,grassland,hills,hills
+    >>
+[/map]

@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use mlua::{Lua, Table, Value as LuaValue};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Value {
     Nil,
     Bool(bool),

@@ -1,0 +1,71 @@
+[scenario]
+    id=ai_test
+    name="Проверка тактического ИИ"
+    random_seed=23
+    village_heal=8
+
+    [resources]
+        map=maps/outpost_defense.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/elvish_archer.wml,units/elvish_fighter.wml,units/orcish_grunt.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/simple_ai.lua,rules/basic_combat.lua
+    [/resources]
+    on_start_dialog=first_battle_intro
+
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+        gold=34
+        recruit=elvish_archer,elvish_fighter
+        caution=1.5
+        grouping=5
+    [/side]
+
+    [unit]
+        id=target
+        type=orcish_grunt
+        side=player
+        x=2
+        y=2
+    [/unit]
+    [unit]
+        id=reserve_target
+        type=orcish_grunt
+        side=player
+        x=1
+        y=7
+    [/unit]
+    [unit]
+        id=weapon_tester
+        type=elvish_archer
+        side=enemy
+        x=3
+        y=2
+    [/unit]
+    [unit]
+        id=wounded
+        type=elvish_archer
+        side=enemy
+        initial_hitpoints=5
+        x=5
+        y=3
+    [/unit]
+    [unit]
+        id=recruiter
+        type=elvish_archer
+        side=enemy
+        is_leader=yes
+        x=10
+        y=4
+    [/unit]
+    [village]
+        x=5
+        y=2
+        side=enemy
+    [/village]
+[/scenario]
