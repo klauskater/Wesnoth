@@ -3,6 +3,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use macroquad::prelude::*;
+#[cfg(any(target_os = "android", test))]
+use wesnoth_engine::terrain::VisualKind;
+#[cfg(target_os = "android")]
+use wesnoth_engine::terrain::build_visuals;
 use wesnoth_engine::{
     engine::{Map, Position},
     game::{DialogLine, Game, GameSnapshot},
@@ -19,6 +23,8 @@ const ANDROID_PANEL_WIDTH: f32 = 420.0;
 const ANDROID_TOP_BAR_HEIGHT: f32 = 84.0;
 #[cfg(any(target_os = "android", test))]
 const ANDROID_TAP_SLOP: f32 = 24.0;
+#[cfg(target_os = "android")]
+const DEBUG_CASTLE_TILES: bool = true;
 const SCENARIOS: [&str; 7] = [
     "scenarios/first_battle.wml",
     "scenarios/crossing.wml",
@@ -84,6 +90,8 @@ struct ClientSnapshot {
     recruit_types: Vec<String>,
     #[cfg(target_os = "android")]
     recruit_options: Vec<RecruitOption>,
+    #[cfg(target_os = "android")]
+    recruit_hexes: Vec<Position>,
     #[cfg(target_os = "android")]
     recall_options: Vec<RecruitOption>,
     recall_units: Vec<String>,
@@ -211,6 +219,16 @@ struct AvailableActions {
 struct AndroidArt {
     terrain: std::collections::BTreeMap<&'static str, Texture2D>,
     water_edges: [Texture2D; 6],
+    transitions: std::collections::BTreeMap<&'static str, [Texture2D; 6]>,
+    green_transition_runs: std::collections::BTreeMap<u8, Texture2D>,
+    castle_convex: [Texture2D; 6],
+    castle_concave: [Texture2D; 6],
+    keep_convex: [Texture2D; 6],
+    keep_concave: [Texture2D; 6],
+    ocean_water: [Texture2D; 3],
+    wood_bridge_ends: [Texture2D; 6],
+    wood_bridge_docks: [Texture2D; 6],
+    stone_bridge_ends: [Texture2D; 6],
     units: std::collections::BTreeMap<&'static str, Texture2D>,
     sidebar: Texture2D,
     status_icons: [Texture2D; 5],
@@ -225,41 +243,178 @@ impl AndroidArt {
             texture.set_filter(FilterMode::Nearest);
             texture
         }
-        let terrain = [
-            (
-                "grassland",
-                include_bytes!("../../assets/wesnoth/terrain/grassland.png").as_slice(),
-            ),
-            (
-                "forest",
-                include_bytes!("../../assets/wesnoth/terrain/forest.png").as_slice(),
-            ),
-            (
-                "hills",
-                include_bytes!("../../assets/wesnoth/terrain/hills.png").as_slice(),
-            ),
-            (
-                "water",
-                include_bytes!(
-                    "../../../Wesnoth-upstream/data/core/images/terrain/water/coast-tile.png"
+        macro_rules! terrain_asset {
+            ($id:literal, $path:literal) => {
+                (
+                    $id,
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/",
+                        $path
+                    ))
+                    .as_slice(),
                 )
-                .as_slice(),
-            ),
-            (
-                "castle",
-                include_bytes!("../../assets/wesnoth/terrain/castle.png").as_slice(),
-            ),
-            (
-                "keep",
-                include_bytes!("../../assets/wesnoth/terrain/keep.png").as_slice(),
-            ),
-            (
-                "village",
-                include_bytes!("../../assets/wesnoth/terrain/village.png").as_slice(),
-            ),
+            };
+        }
+        let terrain = [
+            terrain_asset!("grass-green", "grass/green.png"),
+            terrain_asset!("grass-semi-dry", "grass/semi-dry.png"),
+            terrain_asset!("grass-dry", "grass/dry.png"),
+            terrain_asset!("leaf-litter", "grass/leaf-litter.png"),
+            terrain_asset!("dirt", "flat/dirt.png"),
+            terrain_asset!("stone-path", "flat/stone-path.png"),
+            terrain_asset!("beach", "sand/beach.png"),
+            terrain_asset!("hills-regular", "hills/regular.png"),
+            terrain_asset!("mountains", "mountains/basic.png"),
+            terrain_asset!("mountain-wall", "mountains/basic-castle-n.png"),
+            terrain_asset!("swamp", "swamp/water.png"),
+            terrain_asset!("ocean", "water/ocean-A01.png"),
+            terrain_asset!("water", "water/coast-tile.png"),
+            terrain_asset!("castle-ground", "castle/castle-tile.png"),
+            terrain_asset!("keep-ground", "castle/keep-tile.png"),
+            terrain_asset!("encampment-tent", "castle/encampment/tent.png"),
+            terrain_asset!("forest-mixed-1", "forest/mixed-summer.png"),
+            terrain_asset!("forest-mixed-2", "forest/mixed-summer2.png"),
+            terrain_asset!("forest-mixed-3", "forest/mixed-summer.png"),
+            terrain_asset!("forest-summer-1", "forest/deciduous-summer.png"),
+            terrain_asset!("forest-summer-2", "forest/deciduous-summer2.png"),
+            terrain_asset!("forest-summer-3", "forest/deciduous-summer3.png"),
+            terrain_asset!("forest-pine-1", "forest/pine.png"),
+            terrain_asset!("forest-pine-2", "forest/pine2.png"),
+            terrain_asset!("forest-pine-3", "forest/pine3.png"),
+            terrain_asset!("forest-mixed-small", "forest/mixed-summer-small.png"),
+            terrain_asset!("forest-summer-small", "forest/deciduous-summer-small.png"),
+            terrain_asset!("forest-pine-small", "forest/pine-small.png"),
+            terrain_asset!("village-human", "village/human.png"),
+            terrain_asset!("village-human-city-ruin", "village/human-city-ruin.png"),
+            terrain_asset!("village-human-hills-ruin", "village/human-hills-ruin.png"),
+            terrain_asset!("village-hills", "village/human-hills.png"),
+            terrain_asset!("village-hut", "village/hut.png"),
+            terrain_asset!("village-log-cabin", "village/log-cabin.png"),
+            terrain_asset!("village-camp", "village/camp.png"),
+            terrain_asset!("wood-bridge-n-s", "bridge/wood-n-s.png"),
+            terrain_asset!("wood-bridge-ne-sw", "bridge/wood-ne-sw.png"),
+            terrain_asset!("wood-bridge-se-nw", "bridge/wood-se-nw.png"),
+            terrain_asset!("stone-bridge-n-s", "bridge/stonebridge-s-n.png"),
+            terrain_asset!("stone-bridge-ne-sw", "bridge/stonebridge-sw-ne.png"),
+            terrain_asset!("stone-bridge-se-nw", "bridge/stonebridge-se-nw.png"),
+            terrain_asset!("wood-bridge-n-se-sw", "bridge/wood-n-se-sw.png"),
+            terrain_asset!("wood-bridge-ne-s-nw", "bridge/wood-ne-s-nw.png"),
+            terrain_asset!("wood-bridge-n-se", "bridge/wood-n-se.png"),
+            terrain_asset!("wood-bridge-ne-s", "bridge/wood-ne-s.png"),
+            terrain_asset!("wood-bridge-se-sw", "bridge/wood-se-sw.png"),
+            terrain_asset!("wood-bridge-s-nw", "bridge/wood-s-nw.png"),
+            terrain_asset!("wood-bridge-sw-n", "bridge/wood-sw-n.png"),
+            terrain_asset!("wood-bridge-nw-ne", "bridge/wood-nw-ne.png"),
+            terrain_asset!("flowers-mixed", "embellishments/flowers-mixed.png"),
+            terrain_asset!("flowers-farm", "embellishments/flowers-mixed.png"),
+            terrain_asset!("mushrooms", "embellishments/mushroom.png"),
+            terrain_asset!("stones", "embellishments/stones-small.png"),
+            terrain_asset!("detritus", "misc/detritus/liter.png"),
+            terrain_asset!("water-flowers", "embellishments/water-lilies-flower.png"),
+            terrain_asset!("farm", "embellishments/farm-veg-spring.png"),
+            terrain_asset!("windmill", "misc/windmill-A01.png"),
         ]
         .into_iter()
         .map(|(id, bytes)| (id, texture(bytes)))
+        .collect();
+        macro_rules! transition {
+            ($id:literal, $path:literal) => {
+                (
+                    $id,
+                    ["n", "ne", "se", "s", "sw", "nw"].map(|direction| {
+                        let bytes = match direction {
+                            "n" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $path,
+                                "-n.png"
+                            ))
+                            .as_slice(),
+                            "ne" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $path,
+                                "-ne.png"
+                            ))
+                            .as_slice(),
+                            "se" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $path,
+                                "-se.png"
+                            ))
+                            .as_slice(),
+                            "s" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $path,
+                                "-s.png"
+                            ))
+                            .as_slice(),
+                            "sw" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $path,
+                                "-sw.png"
+                            ))
+                            .as_slice(),
+                            _ => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $path,
+                                "-nw.png"
+                            ))
+                            .as_slice(),
+                        };
+                        texture(bytes)
+                    }),
+                )
+            };
+        }
+        let transitions = [
+            transition!("transition-beach", "sand/beach"),
+            transition!("transition-grass-dry", "grass/dry"),
+            transition!("transition-grass-semi-dry", "grass/semi-dry"),
+            transition!("transition-grass-green", "grass/green"),
+            transition!("transition-leaf-litter", "grass/leaf-litter"),
+            transition!("transition-dirt", "flat/dirt"),
+            transition!("transition-stone-path", "flat/stone-path"),
+            transition!("transition-hills", "hills/regular"),
+            transition!("transition-swamp", "swamp/water"),
+            transition!("transition-ocean", "water/ocean-A01"),
+        ]
+        .into_iter()
+        .collect();
+        macro_rules! green_run {
+            ($mask:expr, $name:literal) => {
+                (
+                    $mask,
+                    texture(include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/grass/",
+                        $name,
+                        ".png"
+                    ))),
+                )
+            };
+        }
+        let green_transition_runs = [
+            green_run!(1, "green-n"),
+            green_run!(2, "green-ne"),
+            green_run!(4, "green-se"),
+            green_run!(8, "green-s"),
+            green_run!(16, "green-sw"),
+            green_run!(32, "green-nw"),
+            green_run!(3, "green-n-ne"),
+            green_run!(6, "green-ne-se"),
+            green_run!(12, "green-se-s"),
+            green_run!(24, "green-s-sw"),
+            green_run!(48, "green-sw-nw"),
+            green_run!(33, "green-nw-n"),
+            green_run!(7, "green-n-ne-se"),
+            green_run!(14, "green-ne-se-s"),
+            green_run!(28, "green-se-s-sw"),
+            green_run!(56, "green-s-sw-nw"),
+            green_run!(49, "green-sw-nw-n"),
+            green_run!(35, "green-nw-n-ne"),
+            green_run!(59, "green-s-sw-nw-n-ne"),
+            green_run!(55, "green-sw-nw-n-ne-se"),
+            green_run!(63, "green-s-sw-nw-n-ne-se"),
+        ]
+        .into_iter()
         .collect();
         let water_edges = [
             include_bytes!(
@@ -288,6 +443,175 @@ impl AndroidArt {
             .as_slice(),
         ]
         .map(texture);
+        let castle_convex = [
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-tl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-tr.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-r.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-br.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-bl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-l.png"
+            )
+            .as_slice(),
+        ]
+        .map(texture);
+        let castle_concave = [
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-tl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-tr.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-r.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-br.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-bl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-l.png"
+            )
+            .as_slice(),
+        ]
+        .map(texture);
+        let keep_convex = [
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-tl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-tr.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-r.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-br.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-bl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-l.png"
+            )
+            .as_slice(),
+        ]
+        .map(texture);
+        let keep_concave = [
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-tl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-tr.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-r.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-br.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-bl.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-l.png"
+            )
+            .as_slice(),
+        ]
+        .map(texture);
+        let ocean_water = [
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/water/ocean-A01.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/water/ocean-A02.png"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../Wesnoth-upstream/data/core/images/terrain/water/ocean-A03.png"
+            )
+            .as_slice(),
+        ]
+        .map(texture);
+        macro_rules! bridge_ends {
+            ($stem:literal) => {
+                [
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/bridge/",
+                        $stem,
+                        "-n.png"
+                    ))
+                    .as_slice(),
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/bridge/",
+                        $stem,
+                        "-ne.png"
+                    ))
+                    .as_slice(),
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/bridge/",
+                        $stem,
+                        "-se.png"
+                    ))
+                    .as_slice(),
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/bridge/",
+                        $stem,
+                        "-s.png"
+                    ))
+                    .as_slice(),
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/bridge/",
+                        $stem,
+                        "-sw.png"
+                    ))
+                    .as_slice(),
+                    include_bytes!(concat!(
+                        "../../../Wesnoth-upstream/data/core/images/terrain/bridge/",
+                        $stem,
+                        "-nw.png"
+                    ))
+                    .as_slice(),
+                ]
+                .map(texture)
+            };
+        }
+        let wood_bridge_ends = bridge_ends!("wood-end");
+        let wood_bridge_docks = bridge_ends!("wood-dock");
+        let stone_bridge_ends = bridge_ends!("stonebridge");
         let units = [
             (
                 "spearman",
@@ -397,6 +721,16 @@ impl AndroidArt {
         Self {
             terrain,
             water_edges,
+            transitions,
+            green_transition_runs,
+            castle_convex,
+            castle_concave,
+            keep_convex,
+            keep_concave,
+            ocean_water,
+            wood_bridge_ends,
+            wood_bridge_docks,
+            stone_bridge_ends,
             units,
             sidebar,
             status_icons,
@@ -422,6 +756,8 @@ async fn main() {
     let art = AndroidArt::load();
     #[cfg(target_os = "android")]
     let mut viewport = AndroidViewport::new();
+    #[cfg(target_os = "android")]
+    let mut viewport_map_size = (0, 0);
     #[cfg(target_os = "android")]
     exclude_android_system_gestures();
     #[cfg(target_os = "android")]
@@ -564,10 +900,27 @@ async fn main() {
         .expect("UI snapshot");
         #[cfg(target_os = "android")]
         {
+            let map_size = (snapshot.map.width, snapshot.map.height);
+            if viewport_map_size != map_size {
+                if let Some(leader) = snapshot
+                    .objects
+                    .iter()
+                    .find(|unit| unit.side == snapshot.active_side && unit.id == "Arvith")
+                    .or_else(|| {
+                        snapshot
+                            .objects
+                            .iter()
+                            .find(|unit| unit.side == snapshot.active_side)
+                    })
+                {
+                    viewport.center_on(hex_center(leader.position.x, leader.position.y));
+                }
+                viewport_map_size = map_size;
+            }
             let point = Vec2::from(mouse_position());
             let panel_x = screen_width() - ANDROID_PANEL_WIDTH;
             let scroll_top = ANDROID_TOP_BAR_HEIGHT + 76.0;
-            let scroll_bottom = cancel_selection_rect().y - 6.0;
+            let scroll_bottom = recruit_button_rect().y - 6.0;
             if is_mouse_button_pressed(MouseButton::Left)
                 && point.x >= panel_x
                 && point.y >= scroll_top
@@ -710,6 +1063,14 @@ async fn main() {
             && !confirm_end_turn
             && ui_point.is_some_and(|point| cancel_selection_rect().contains(point));
         #[cfg(target_os = "android")]
+        let recruit_hex = inspected_hex.filter(|position| recruit_tile(&snapshot.map, *position));
+        #[cfg(target_os = "android")]
+        let recruit_button = recruit_menu.is_none()
+            && combat_dialog.is_none()
+            && !confirm_end_turn
+            && recruit_hex.is_some()
+            && ui_point.is_some_and(|point| recruit_button_rect().contains(point));
+        #[cfg(target_os = "android")]
         let end_turn_button = recruit_menu.is_none()
             && combat_dialog.is_none()
             && !confirm_end_turn
@@ -842,14 +1203,11 @@ async fn main() {
         }
 
         #[cfg(target_os = "android")]
-        if recruit_menu.is_none()
+        if recruit_button
+            && let Some(position) = recruit_hex
+            && snapshot.recruit_hexes.contains(&position)
             && (!snapshot.recruit_options.is_empty() || !snapshot.recall_options.is_empty())
-            && let Some(point) = gesture
-                .long_press
-                .map(|point| viewport.screen_to_world(point))
-            && let Some(position) = hex_at(&snapshot, point)
         {
-            viewport.cancel_gesture();
             recruit_menu = Some(RecruitMenu {
                 destination: position,
                 selected: 0,
@@ -1177,7 +1535,7 @@ async fn main() {
             panel_scroll,
         );
         #[cfg(target_os = "android")]
-        draw_game_buttons(&font, &snapshot, selected.is_some());
+        draw_game_buttons(&font, &snapshot, selected.is_some(), inspected_hex);
         #[cfg(target_os = "android")]
         if let Some(combat) = &combat_dialog {
             draw_combat_dialog(&font, &art, &snapshot, combat, &actions.attacks);
@@ -1758,7 +2116,7 @@ fn hex_at(snapshot: &ClientSnapshot, point: Vec2) -> Option<Position> {
 struct AndroidViewport {
     offset: Vec2,
     scale: f32,
-    drag: Option<(Vec2, Vec2, bool, bool, f64, bool)>,
+    drag: Option<(Vec2, Vec2, bool, bool)>,
     pinch: Option<(f32, Vec2)>,
 }
 
@@ -1766,7 +2124,6 @@ struct AndroidViewport {
 #[derive(Default)]
 struct ViewportGesture {
     tap: Option<Vec2>,
-    long_press: Option<Vec2>,
 }
 
 #[cfg(target_os = "android")]
@@ -1791,6 +2148,14 @@ impl AndroidViewport {
     fn cancel_gesture(&mut self) {
         self.drag = None;
         self.pinch = None;
+    }
+
+    fn center_on(&mut self, point: Vec2) {
+        let map_center = vec2(
+            (screen_width() - ANDROID_PANEL_WIDTH) / 2.0,
+            screen_height() / 2.0,
+        );
+        self.offset = map_center - point * self.scale;
     }
 
     fn update(&mut self) -> ViewportGesture {
@@ -1818,19 +2183,17 @@ impl AndroidViewport {
         let point = Vec2::from(mouse_position());
         if is_mouse_button_pressed(MouseButton::Left) {
             let blocked = touch_blocked(point);
-            self.drag = Some((point, point, false, blocked, get_time(), false));
+            self.drag = Some((point, point, false, blocked));
             if is_mouse_button_released(MouseButton::Left) {
                 self.drag = None;
                 return ViewportGesture {
                     tap: (!blocked).then_some(point),
-                    long_press: None,
                 };
             }
             return ViewportGesture::default();
         }
         if is_mouse_button_down(MouseButton::Left) {
-            let mut long_press = None;
-            if let Some((start, last, moved, blocked, started, fired)) = self.drag.as_mut() {
+            if let Some((start, last, moved, blocked)) = self.drag.as_mut() {
                 if !*blocked {
                     let was_moved = *moved;
                     *moved |= start.distance(point) > ANDROID_TAP_SLOP;
@@ -1840,22 +2203,15 @@ impl AndroidViewport {
                         } else {
                             point - *start
                         };
-                    } else if !*fired && get_time() - *started >= 0.55 {
-                        *fired = true;
-                        long_press = Some(*start);
                     }
                 }
                 *last = point;
             }
-            return ViewportGesture {
-                tap: None,
-                long_press,
-            };
+            return ViewportGesture { tap: None };
         }
-        if let Some((_, _, moved, blocked, _, fired)) = self.drag.take() {
+        if let Some((_, _, moved, blocked)) = self.drag.take() {
             return ViewportGesture {
-                tap: (!moved && !blocked && !fired).then_some(point),
-                long_press: None,
+                tap: (!moved && !blocked).then_some(point),
             };
         }
         ViewportGesture::default()
@@ -1916,10 +2272,22 @@ fn cancel_selection_rect() -> Rect {
 }
 
 #[cfg(target_os = "android")]
+fn recruit_button_rect() -> Rect {
+    let cancel = cancel_selection_rect();
+    Rect::new(cancel.x, cancel.y - 78.0, cancel.w, 66.0)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn recruit_tile(map: &Map, position: Position) -> bool {
+    matches!(map.get(position), Ok("castle" | "keep"))
+}
+
+#[cfg(target_os = "android")]
 fn touch_blocked(point: Vec2) -> bool {
     menu_hotspot().contains(point)
         || end_turn_rect().contains(point)
         || cancel_selection_rect().contains(point)
+        || recruit_button_rect().contains(point)
         || point.y <= ANDROID_TOP_BAR_HEIGHT
         || point.x >= screen_width() - ANDROID_PANEL_WIDTH
 }
@@ -1937,28 +2305,97 @@ fn draw_map_android(
     move_preview: Option<&MovePreview>,
     inspected_hex: Option<Position>,
 ) {
-    // Wesnoth terrain is composited in passes: ground first, decorations after it.
-    // Drawing both per cell lets the next ground tile erase forests and villages.
+    // Wesnoth terrain is composited globally by layer; large overlays may span hexes.
     for y in 1..=snapshot.map.height as i64 {
         for x in 1..=snapshot.map.width as i64 {
             let destination = Position { x, y };
             let center = viewport.world_to_screen(hex_center(x, y));
             let radius = HEX_RADIUS * viewport.scale;
-            let terrain = snapshot.map.get(destination).unwrap_or("grassland");
-            let tint = terrain_tint(snapshot, destination, reachable, selected.is_some());
             draw_wesnoth_hex(center, radius, Color::from_rgba(45, 65, 40, 255));
-            let (ground, _) = terrain_layers(terrain);
-            if let Some(texture) = art.terrain.get(ground) {
-                draw_texture_ex(
-                    texture,
-                    center.x - radius,
-                    center.y - radius,
-                    tint,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(radius * 2.0, radius * 2.0)),
-                        ..Default::default()
-                    },
-                );
+        }
+    }
+    let water_frame = (get_time() * 5.0) as usize;
+    for tile in build_visuals(&snapshot.map) {
+        let center = viewport.world_to_screen(hex_center(tile.position.x, tile.position.y));
+        let tint = terrain_tint(snapshot, tile.position, reachable, selected.is_some());
+        let texture = match tile.kind {
+            VisualKind::Edge(direction) => Some(&art.water_edges[direction]),
+            VisualKind::Transition(direction) => art
+                .transitions
+                .get(tile.image)
+                .map(|textures| &textures[direction]),
+            VisualKind::TransitionRun(mask) => art.green_transition_runs.get(&mask).or_else(|| {
+                let direction = mask.trailing_zeros() as usize;
+                art.transitions
+                    .get(tile.image)
+                    .map(|textures| &textures[direction])
+            }),
+            VisualKind::CastleConvex(corner) => {
+                Some(&art.castle_convex[castle_texture_index(corner)])
+            }
+            VisualKind::CastleConcave(corner) => {
+                Some(&art.castle_concave[castle_texture_index(corner)])
+            }
+            VisualKind::KeepConvex(corner) => Some(&art.keep_convex[castle_texture_index(corner)]),
+            VisualKind::KeepConcave(corner) => {
+                Some(&art.keep_concave[castle_texture_index(corner)])
+            }
+            VisualKind::BridgeEnd(direction) if tile.image == "stone-bridge-end" => {
+                Some(&art.stone_bridge_ends[direction])
+            }
+            VisualKind::BridgeEnd(direction) if tile.image == "wood-bridge-dock" => {
+                Some(&art.wood_bridge_docks[direction])
+            }
+            VisualKind::BridgeEnd(direction) => Some(&art.wood_bridge_ends[direction]),
+            VisualKind::Base if tile.image == "ocean" => {
+                Some(&art.ocean_water[water_frame % art.ocean_water.len()])
+            }
+            _ => art.terrain.get(tile.image),
+        };
+        if let Some(texture) = texture {
+            let scale = viewport.scale;
+            let size = vec2(texture.width(), texture.height()) * scale;
+            let anchor = terrain_anchor(
+                tile.kind,
+                tile.image,
+                vec2(texture.width(), texture.height()),
+            ) * scale;
+            draw_texture_ex(
+                texture,
+                center.x - anchor.x,
+                center.y - anchor.y,
+                tint,
+                DrawTextureParams {
+                    dest_size: Some(size),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    if DEBUG_CASTLE_TILES {
+        for y in 1..=snapshot.map.height as i64 {
+            for x in 1..=snapshot.map.width as i64 {
+                let position = Position { x, y };
+                let Ok(raw) = snapshot.map.raw(position) else {
+                    continue;
+                };
+                let base = raw
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or(raw)
+                    .split('^')
+                    .next()
+                    .unwrap_or(raw);
+                let (label, color) = match base {
+                    "Ce" => ("C", Color::from_rgba(255, 45, 210, 230)),
+                    "Ke" => ("K", Color::from_rgba(30, 235, 255, 230)),
+                    _ => continue,
+                };
+                let center = viewport.world_to_screen(hex_center(x, y));
+                let radius = HEX_RADIUS * viewport.scale * 0.88;
+                draw_wesnoth_hex(center, radius, Color { a: 0.16, ..color });
+                draw_wesnoth_hex_lines(center, radius, 4.0, color);
+                text(font, label, center.x - 6.0, center.y + 7.0, 20.0, WHITE);
             }
         }
     }
@@ -1967,38 +2404,6 @@ fn draw_map_android(
             let destination = Position { x, y };
             let center = viewport.world_to_screen(hex_center(x, y));
             let radius = HEX_RADIUS * viewport.scale;
-            let terrain = snapshot.map.get(destination).unwrap_or("grassland");
-            let tint = terrain_tint(snapshot, destination, reachable, selected.is_some());
-            if terrain != "water" {
-                for (direction, neighbor) in hex_neighbors(destination).into_iter().enumerate() {
-                    if snapshot.map.get(neighbor) == Ok("water") {
-                        draw_texture_ex(
-                            &art.water_edges[direction],
-                            center.x - radius,
-                            center.y - radius,
-                            tint,
-                            DrawTextureParams {
-                                dest_size: Some(vec2(radius * 2.0, radius * 2.0)),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-            }
-            if let Some(overlay) = terrain_layers(terrain).1
-                && let Some(texture) = art.terrain.get(overlay)
-            {
-                draw_texture_ex(
-                    texture,
-                    center.x - radius,
-                    center.y - radius,
-                    tint,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(radius * 2.0, radius * 2.0)),
-                        ..Default::default()
-                    },
-                );
-            }
             if show_grid {
                 draw_wesnoth_hex_lines(center, radius, 1.5, Color::from_rgba(20, 28, 20, 180));
             }
@@ -2097,6 +2502,23 @@ fn draw_map_android(
             );
         }
         draw_unit_status(center, scale, object);
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn castle_texture_index(corner: usize) -> usize {
+    (corner + 1) % 6
+}
+
+#[cfg(any(target_os = "android", test))]
+fn terrain_anchor(kind: VisualKind, image: &str, size: Vec2) -> Vec2 {
+    match kind {
+        VisualKind::CastleConvex(_)
+        | VisualKind::CastleConcave(_)
+        | VisualKind::KeepConvex(_)
+        | VisualKind::KeepConcave(_) => vec2(36.0, 108.0),
+        VisualKind::Base if image == "mountains" => vec2(90.0, 144.0),
+        _ => size / 2.0,
     }
 }
 
@@ -2437,7 +2859,7 @@ fn draw_android_panel(
         border,
     );
     let content_top = top + 76.0;
-    let content_bottom = cancel_selection_rect().y - 6.0;
+    let content_bottom = recruit_button_rect().y - 6.0;
     unsafe {
         get_internal_gl().quad_gl.scissor(Some((
             x as i32,
@@ -2635,7 +3057,7 @@ fn draw_android_panel(
 
 #[cfg(target_os = "android")]
 fn android_panel_max_scroll(snapshot: &ClientSnapshot, selected: Option<&str>) -> f32 {
-    let viewport_height = cancel_selection_rect().y - 6.0 - (ANDROID_TOP_BAR_HEIGHT + 76.0);
+    let viewport_height = recruit_button_rect().y - 6.0 - (ANDROID_TOP_BAR_HEIGHT + 76.0);
     let unit_height = selected
         .and_then(|id| snapshot.objects.iter().find(|unit| unit.id == id))
         .map_or(0.0, |unit| 153.0 + unit.attacks.len() as f32 * 48.0);
@@ -2744,7 +3166,28 @@ fn time_name(id: &str) -> &str {
 }
 
 #[cfg(target_os = "android")]
-fn draw_game_buttons(font: &Font, snapshot: &ClientSnapshot, has_selection: bool) {
+fn draw_game_buttons(
+    font: &Font,
+    snapshot: &ClientSnapshot,
+    has_selection: bool,
+    inspected_hex: Option<Position>,
+) {
+    if let Some(position) = inspected_hex.filter(|position| recruit_tile(&snapshot.map, *position))
+    {
+        let enabled = snapshot.recruit_hexes.contains(&position)
+            && (!snapshot.recruit_options.is_empty() || !snapshot.recall_options.is_empty());
+        dialog_button(font, recruit_button_rect(), "Нанять", enabled);
+        if !enabled {
+            let button = recruit_button_rect();
+            draw_rectangle(
+                button.x,
+                button.y,
+                button.w,
+                button.h,
+                Color::from_rgba(20, 20, 20, 150),
+            );
+        }
+    }
     let cancel = cancel_selection_rect();
     dialog_button(font, cancel, "Снять выбор", false);
     if !has_selection {
@@ -3804,6 +4247,11 @@ fn read_snapshot(snapshot: GameSnapshot, status: Value) -> Result<ClientSnapshot
             })
             .collect::<Result<_, String>>()?,
         #[cfg(target_os = "android")]
+        recruit_hexes: value_list(&status, "recruit_hexes")?
+            .iter()
+            .map(|position| position_from_value(position).ok_or("invalid recruit hex".to_owned()))
+            .collect::<Result<_, String>>()?,
+        #[cfg(target_os = "android")]
         recall_options: value_list(&status, "recall_options")?
             .iter()
             .map(read_recruit_option)
@@ -4246,6 +4694,38 @@ mod tests {
             hex_neighbors(center)
                 .into_iter()
                 .all(|cell| map.are_adjacent(center, cell))
+        );
+    }
+
+    #[test]
+    fn recruit_button_is_contextual_to_castle_terrain() {
+        let map = Map {
+            width: 3,
+            height: 1,
+            cells: vec!["Gg".into(), "Ce".into(), "Ke".into()],
+        };
+        assert!(!recruit_tile(&map, Position { x: 1, y: 1 }));
+        assert!(recruit_tile(&map, Position { x: 2, y: 1 }));
+        assert!(recruit_tile(&map, Position { x: 3, y: 1 }));
+    }
+
+    #[test]
+    fn original_terrain_assets_use_their_rule_anchors() {
+        assert_eq!(
+            (0..6).map(castle_texture_index).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 0]
+        );
+        assert_eq!(
+            terrain_anchor(
+                VisualKind::CastleConvex(0),
+                "castle-convex",
+                vec2(126.0, 180.0)
+            ),
+            vec2(36.0, 108.0)
+        );
+        assert_eq!(
+            terrain_anchor(VisualKind::Base, "mountains", vec2(180.0, 216.0)),
+            vec2(90.0, 144.0)
         );
     }
 

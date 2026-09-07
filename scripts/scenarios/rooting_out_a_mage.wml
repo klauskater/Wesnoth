@@ -13,7 +13,7 @@
 
     [resources]
         map=maps/rooting_out_a_mage.wml
-        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
         unit_types=units/knight.wml,units/spearman.wml,units/bowman.wml,units/dark_sorcerer.wml,units/walking_corpse.wml
         dialogs=dialogs/rooting_out_a_mage.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
@@ -40,16 +40,16 @@
         type=knight
         side=player
         is_leader=yes
-        x=3
-        y=6
+        x=33
+        y=21
     [/unit]
     [unit]
         id=Alwyn
         name="Алвин"
         type=spearman
         side=player
-        x=2
-        y=5
+        x=30
+        y=22
         upkeep=loyal
     [/unit]
     [unit]
@@ -57,8 +57,8 @@
         name="Брент"
         type=spearman
         side=player
-        x=3
-        y=5
+        x=30
+        y=21
         upkeep=loyal
     [/unit]
     [unit]
@@ -66,8 +66,8 @@
         name="Эфран"
         type=bowman
         side=player
-        x=4
-        y=6
+        x=33
+        y=19
         upkeep=loyal
     [/unit]
 
@@ -78,45 +78,82 @@
         side=enemy
         is_leader=yes
         x=10
-        y=4
+        y=5
     [/unit]
     [unit]
         id=thrall_one
         type=walking_corpse
         side=enemy
-        x=8
-        y=3
+        x=9
+        y=6
     [/unit]
     [unit]
         id=thrall_two
         type=walking_corpse
         side=enemy
-        x=8
+        x=11
         y=5
     [/unit]
 
     [village]
-        x=2
-        y=4
-        side=player
-    [/village]
-    [village]
-        x=5
+        x=8
         y=2
+        side=enemy
     [/village]
     [village]
-        x=7
+        x=38
+        y=3
+    [/village]
+    [village]
+        x=31
         y=4
     [/village]
     [village]
-        x=5
-        y=7
+        x=15
+        y=5
+        side=enemy
+    [/village]
+    [village]
+        x=6
+        y=9
+    [/village]
+    [village]
+        x=37
+        y=10
+    [/village]
+    [village]
+        x=15
+        y=12
+    [/village]
+    [village]
+        x=6
+        y=13
+    [/village]
+    [village]
+        x=36
+        y=14
+    [/village]
+    [village]
+        x=36
+        y=19
         side=player
     [/village]
     [village]
-        x=10
-        y=6
-        side=enemy
+        x=27
+        y=20
+        side=player
+    [/village]
+    [village]
+        x=37
+        y=23
+    [/village]
+    [village]
+        x=22
+        y=27
+    [/village]
+    [village]
+        x=32
+        y=27
     [/village]
 
     [turn_event]

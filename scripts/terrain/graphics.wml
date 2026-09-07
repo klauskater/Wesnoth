@@ -1,0 +1,359 @@
+# Compact, pre-normalization-friendly terrain rules used by the port.
+# @R0 is expanded to n,ne,se,s,sw,nw when rotations=6.
+
+[terrain_rule]
+    id=base-grass-green
+    [constraint]
+        terrain=Gg*
+    [/constraint]
+    [image]
+        name=grass-green
+        layer=-1000
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=base-castle
+    [constraint]
+        terrain=Ce
+    [/constraint]
+    [image]
+        name=dirt
+        layer=-1000
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=base-keep
+    [constraint]
+        terrain=Ke
+    [/constraint]
+    [image]
+        name=dirt
+        layer=-1000
+    [/image]
+[/terrain_rule]
+
+# One convex wall corner: castle at the anchor, open ground to N and NE.
+[terrain_rule]
+    id=encampment-wall-convex
+    rotations=6
+    rotation_names=tr,r,br,bl,l,tl
+    [constraint]
+        terrain=Ce,Ke
+        forbid_flags=castlewall-@R0
+        set_flags=castlewall-@R0
+    [/constraint]
+    [constraint]
+        q=0
+        r=-1
+        terrain=*
+        exclude=C*,K*
+        forbid_flags=castlewall-@R2
+        set_flags=castlewall-@R2
+    [/constraint]
+    [constraint]
+        q=1
+        r=-1
+        terrain=*
+        exclude=C*,K*
+        forbid_flags=castlewall-@R4
+        set_flags=castlewall-@R4
+    [/constraint]
+    [image]
+        name=encampment-convex-@R0
+        layer=20
+        base=54,72
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-n-s
+    [constraint]
+        terrain=*^Bw|*
+    [/constraint]
+    [image]
+        name=wood-bridge-n-s
+        layer=-10
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-ne-sw
+    [constraint]
+        terrain=*^Bw/*
+    [/constraint]
+    [image]
+        name=wood-bridge-ne-sw
+        layer=-10
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-se-nw
+    [constraint]
+        terrain=*^Bw\*
+    [/constraint]
+    [image]
+        name=wood-bridge-se-nw
+        layer=-10
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-stone-n-s
+    [constraint]
+        terrain=*^Bsb|*
+    [/constraint]
+    [image]
+        name=stone-bridge-n-s
+        layer=-10
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-stone-ne-sw
+    [constraint]
+        terrain=*^Bsb/*
+    [/constraint]
+    [image]
+        name=stone-bridge-ne-sw
+        layer=-10
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-stone-se-nw
+    [constraint]
+        terrain=*^Bsb\*
+    [/constraint]
+    [image]
+        name=stone-bridge-se-nw
+        layer=-10
+    [/image]
+[/terrain_rule]
+
+# Water-facing bridge ends use dock pieces. These rules run before the land
+# ramps and claim only the matching end of the bridge.
+[terrain_rule]
+    id=bridge-wood-dock-n-s
+    rotation_turns=0,3
+    [constraint]
+        terrain=*^Bw|*
+        forbid_flags=bridge-end-@R0
+        set_flags=bridge-end-@R0
+    [/constraint]
+    [constraint]
+        q=0
+        r=-1
+        terrain=W*,Ss*
+        exclude=*^Bw|*
+    [/constraint]
+    [image]
+        name=wood-bridge-dock-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-dock-ne-sw
+    rotation_turns=0,3
+    rotation_names=ne,se,s,sw,n,nw
+    [constraint]
+        terrain=*^Bw/*
+        forbid_flags=bridge-end-@R0
+        set_flags=bridge-end-@R0
+    [/constraint]
+    [constraint]
+        q=1
+        r=-1
+        terrain=W*,Ss*
+        exclude=*^Bw/*
+    [/constraint]
+    [image]
+        name=wood-bridge-dock-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-dock-se-nw
+    rotation_turns=0,3
+    rotation_names=se,s,sw,nw,n,ne
+    [constraint]
+        terrain=*^Bw\*
+        forbid_flags=bridge-end-@R0
+        set_flags=bridge-end-@R0
+    [/constraint]
+    [constraint]
+        q=1
+        r=0
+        terrain=W*,Ss*
+        exclude=*^Bw\*
+    [/constraint]
+    [image]
+        name=wood-bridge-dock-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+# Land-facing bridge ends use ramps. Each compact rule covers the two
+# opposite ends of one axis.
+[terrain_rule]
+    id=bridge-wood-end-n-s
+    rotation_turns=0,3
+    [constraint]
+        terrain=*^Bw|*
+        forbid_flags=bridge-end-@R0
+        set_flags=bridge-end-@R0
+    [/constraint]
+    [constraint]
+        q=0
+        r=-1
+        terrain=*
+        exclude=W*,Ss*,*^Bw|*
+    [/constraint]
+    [image]
+        name=wood-bridge-end-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-end-ne-sw
+    rotation_turns=0,3
+    rotation_names=ne,se,s,sw,n,nw
+    [constraint]
+        terrain=*^Bw/*
+        forbid_flags=bridge-end-@R0
+        set_flags=bridge-end-@R0
+    [/constraint]
+    [constraint]
+        q=1
+        r=-1
+        terrain=*
+        exclude=W*,Ss*,*^Bw/*
+    [/constraint]
+    [image]
+        name=wood-bridge-end-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-wood-end-se-nw
+    rotation_turns=0,3
+    rotation_names=se,s,sw,nw,n,ne
+    [constraint]
+        terrain=*^Bw\*
+        forbid_flags=bridge-end-@R0
+        set_flags=bridge-end-@R0
+    [/constraint]
+    [constraint]
+        q=1
+        r=0
+        terrain=*
+        exclude=W*,Ss*,*^Bw\*
+    [/constraint]
+    [image]
+        name=wood-bridge-end-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-stone-end-n-s
+    rotation_turns=0,3
+    [constraint]
+        terrain=*^Bsb|*
+    [/constraint]
+    [constraint]
+        q=0
+        r=-1
+        terrain=*
+        exclude=*^Bsb|*
+    [/constraint]
+    [image]
+        name=stone-bridge-end-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-stone-end-ne-sw
+    rotation_turns=0,3
+    rotation_names=ne,se,s,sw,n,nw
+    [constraint]
+        terrain=*^Bsb/*
+    [/constraint]
+    [constraint]
+        q=1
+        r=-1
+        terrain=*
+        exclude=*^Bsb/*
+    [/constraint]
+    [image]
+        name=stone-bridge-end-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=bridge-stone-end-se-nw
+    rotation_turns=0,3
+    rotation_names=se,s,sw,nw,n,ne
+    [constraint]
+        terrain=*^Bsb\*
+    [/constraint]
+    [constraint]
+        q=1
+        r=0
+        terrain=*
+        exclude=*^Bsb\*
+    [/constraint]
+    [image]
+        name=stone-bridge-end-@R0
+        layer=-9
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=base-shallow-water
+    [constraint]
+        terrain=Ww*,Wwf*,Wwg*
+    [/constraint]
+    [image]
+        name=water
+        layer=-1000
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=base-deep-water
+    [constraint]
+        terrain=Wo*
+    [/constraint]
+    [image]
+        name=ocean
+        layer=-1000
+    [/image]
+[/terrain_rule]
+
+[terrain_rule]
+    id=ocean-to-shallow
+    rotations=6
+    [constraint]
+        terrain=Ww*,Wwf*,Wwg*
+        forbid_flags=ocean-transition-@R0
+        set_flags=ocean-transition-@R0
+    [/constraint]
+    [constraint]
+        q=0
+        r=-1
+        terrain=Wo*
+    [/constraint]
+    [image]
+        name=transition-ocean-@R0
+        layer=-399
+    [/image]
+[/terrain_rule]

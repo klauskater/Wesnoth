@@ -20,6 +20,10 @@ pub struct Map {
 
 impl Map {
     pub fn get(&self, position: Position) -> Result<&str, String> {
+        Ok(crate::terrain::gameplay_type(self.raw(position)?))
+    }
+
+    pub fn raw(&self, position: Position) -> Result<&str, String> {
         if position.x < 1
             || position.y < 1
             || position.x as usize > self.width

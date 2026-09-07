@@ -1326,6 +1326,25 @@ fn adapted_chase_starts_with_hidden_kidnappers_in_reserve() {
 }
 
 #[test]
+fn chase_discovers_villages_from_map_terrain() {
+    let mut game = the_chase();
+    let status = game.query("status", Value::Nil).unwrap();
+    let villages = value_list_for_test(&status, "villages");
+    assert_eq!(villages.len(), 7);
+    assert!(villages.iter().any(|village| {
+        village.get("x") == Some(&Value::Integer(4))
+            && village.get("y") == Some(&Value::Integer(8))
+            && village.get("side").is_none()
+    }));
+    game.acknowledge_dialog().unwrap();
+    let events = game.execute("move", move_object("Arvith", 4, 8)).unwrap();
+    assert!(events.iter().any(|event| {
+        event.get("type").and_then(Value::as_str) == Some("village_captured")
+            && event.get("side").and_then(Value::as_str) == Some("player")
+    }));
+}
+
+#[test]
 fn reaching_the_north_of_the_woods_reveals_the_kidnappers() {
     let mut game = the_chase();
     game.acknowledge_dialog().unwrap();

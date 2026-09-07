@@ -98,7 +98,8 @@ impl Game {
             }
         }
         for cell in &map.cells {
-            if !map_objects.contains(cell) {
+            let gameplay = crate::terrain::gameplay_type(cell);
+            if !map_objects.contains(gameplay) {
                 return Err(format!("map uses unknown map object: {cell}"));
             }
         }
@@ -176,10 +177,23 @@ impl Game {
                 .cloned()
                 .collect()
         });
+        let villages = map
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| crate::terrain::gameplay_type(cell) == "village")
+            .map(|(index, _)| {
+                Value::Map(BTreeMap::from([
+                    ("x".into(), Value::Integer((index % map.width + 1) as i64)),
+                    ("y".into(), Value::Integer((index / map.width + 1) as i64)),
+                ]))
+            })
+            .collect();
         let mut initial_state = BTreeMap::from([
             ("scenario".into(), Value::Map(node_properties(scenario))),
             ("unit_types".into(), unit_types),
             ("recall".into(), Value::List(recall)),
+            ("villages".into(), Value::List(villages)),
         ]);
         if let Some(campaign) = campaign {
             initial_state.extend(campaign.variables.clone());

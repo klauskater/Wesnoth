@@ -1006,10 +1006,18 @@ function combat.initialize(context)
     context.state:set("active_side", assert(children(scenario(context), "side")[1]).id)
     context.state:set("finished", false)
     context.state:set("next_recruit_id", 1)
-    local villages = {}
-    for _, village in ipairs(children(scenario(context), "village")) do
-        assert(context.map:get(village) == "village", "[village] must reference village terrain")
-        villages[#villages + 1] = { x = village.x, y = village.y, side = village.side }
+    local villages = context.state:get("villages") or {}
+    for _, configured in ipairs(children(scenario(context), "village")) do
+        assert(context.map:get(configured) == "village", "[village] must reference village terrain")
+        local village
+        for _, candidate in ipairs(villages) do
+            if candidate.x == configured.x and candidate.y == configured.y then
+                village = candidate
+                break
+            end
+        end
+        assert(village, "[village] is missing from map villages")
+        village.side = configured.side
     end
     context.state:set("villages", villages)
     for _, side in ipairs(children(scenario(context), "side")) do
