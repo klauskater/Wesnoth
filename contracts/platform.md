@@ -9,6 +9,7 @@
 ```text
 Game::map() -> &Map
 Game::map_tiles() -> &MapTiles
+Game::terrain_scene() -> &TerrainScene
 Game::snapshot() -> { map, objects }
 Game::query(function, command) -> Value
 Game::execute(function, command) -> [event]

@@ -5,5 +5,6 @@ pub mod engine;
 pub mod game;
 pub mod terrain;
 pub mod terrain_rules;
+pub mod terrain_scene;
 pub mod value;
 pub mod wml;

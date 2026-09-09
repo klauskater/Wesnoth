@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::{
     engine::{Engine, Map, Object, World},
+    terrain_scene::TerrainScene,
     value::Value,
     wml::{self, Node},
 };
@@ -31,6 +32,7 @@ pub struct Game {
     pub start_dialog: String,
     engine: Engine,
     map_tiles: MapTiles,
+    terrain_scene: TerrainScene,
     dialogs: BTreeMap<String, Vec<DialogLine>>,
     pending_dialog: Option<String>,
     scenario_path: String,
@@ -287,6 +289,7 @@ impl Game {
             start_dialog: scenario.attribute("on_start_dialog")?.into(),
             engine,
             map_tiles,
+            terrain_scene: TerrainScene::default(),
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
             scenario_path: scenario_path.into(),
@@ -437,6 +440,10 @@ impl Game {
 
     pub fn map_tiles(&self) -> &MapTiles {
         &self.map_tiles
+    }
+
+    pub fn terrain_scene(&self) -> &TerrainScene {
+        &self.terrain_scene
     }
 
     pub fn query(&self, function: &str, command: Value) -> Result<Value, String> {

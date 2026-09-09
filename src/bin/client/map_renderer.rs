@@ -1,9 +1,15 @@
 use macroquad::prelude::*;
-use wesnoth_engine::{engine::Map, game::MapTiles};
+use wesnoth_engine::{
+    engine::{Map, Position},
+    game::MapTiles,
+};
+
+use crate::map_viewport::MapViewport;
 
 const HEX_RADIUS: f32 = 1.0;
 
 struct Cell {
+    position: Position,
     center: Vec2,
     color: Color,
 }
@@ -26,6 +32,7 @@ impl MapRenderer {
                     .map(|tile| Color::from_rgba(tile.color[0], tile.color[1], tile.color[2], 255))
                     .unwrap_or(MAGENTA);
                 cells.push(Cell {
+                    position: Position { x, y },
                     center: hex_center(x, y),
                     color,
                 });
@@ -40,28 +47,54 @@ impl MapRenderer {
         Self { cells, min, max }
     }
 
-    pub fn draw(&self) {
-        let size = self.max - self.min;
-        let scale = ((screen_width() - 32.0) / size.x)
-            .min((screen_height() - 32.0) / size.y)
-            .max(1.0);
-        let offset =
-            (vec2(screen_width(), screen_height()) - size * scale) / 2.0 - self.min * scale;
-
+    pub fn draw_base(&self, viewport: &MapViewport) {
+        let screen = vec2(screen_width(), screen_height());
         for cell in &self.cells {
-            let center = offset + cell.center * scale;
-            draw_hex(center, HEX_RADIUS * scale, cell.color);
+            let center = viewport.project(cell.center, screen);
+            draw_hex(center, HEX_RADIUS * viewport.zoom(), cell.color);
+        }
+    }
+
+    pub fn draw_grid(&self, viewport: &MapViewport, selected: Option<Position>) {
+        let screen = vec2(screen_width(), screen_height());
+        for cell in &self.cells {
+            let center = viewport.project(cell.center, screen);
+            let selected = selected == Some(cell.position);
             draw_hex_lines(
                 center,
-                HEX_RADIUS * scale,
-                (scale * 0.035).clamp(0.5, 1.5),
-                Color::from_rgba(15, 20, 24, 110),
+                HEX_RADIUS * viewport.zoom(),
+                if selected {
+                    3.0
+                } else {
+                    (viewport.zoom() * 0.035).clamp(0.5, 1.5)
+                },
+                if selected {
+                    GOLD
+                } else {
+                    Color::from_rgba(15, 20, 24, 110)
+                },
             );
         }
     }
+
+    pub fn bounds(&self) -> (Vec2, Vec2) {
+        (self.min, self.max)
+    }
+
+    pub fn hex_at(&self, point: Vec2) -> Option<Position> {
+        self.cells
+            .iter()
+            .filter(|cell| point_in_hex(point - cell.center))
+            .min_by(|left, right| {
+                left.center
+                    .distance_squared(point)
+                    .total_cmp(&right.center.distance_squared(point))
+            })
+            .map(|cell| cell.position)
+    }
 }
 
-fn hex_center(x: i64, y: i64) -> Vec2 {
+pub fn hex_center(x: i64, y: i64) -> Vec2 {
     let column = x as f32 - 1.0;
     let row = y as f32 - 1.0;
     vec2(column * 1.5, row * 2.0 - if x % 2 == 0 { 1.0 } else { 0.0 })
@@ -76,6 +109,11 @@ fn vertices(center: Vec2, radius: f32) -> [Vec2; 6] {
         center + vec2(radius * 0.5, radius),
         center + vec2(-radius * 0.5, radius),
     ]
+}
+
+fn point_in_hex(point: Vec2) -> bool {
+    let point = point.abs();
+    point.y <= HEX_RADIUS && point.x <= HEX_RADIUS - point.y * 0.5
 }
 
 fn draw_hex(center: Vec2, radius: f32, color: Color) {
@@ -107,5 +145,11 @@ mod tests {
     fn neighboring_columns_are_vertically_staggered() {
         assert_eq!(hex_center(1, 1), vec2(0.0, 0.0));
         assert_eq!(hex_center(2, 1), vec2(1.5, -1.0));
+    }
+
+    #[test]
+    fn hit_test_rejects_a_point_outside_the_sloped_corner() {
+        assert!(point_in_hex(vec2(0.0, 0.0)));
+        assert!(!point_in_hex(vec2(0.9, 0.9)));
     }
 }

@@ -3,12 +3,18 @@ use wesnoth_engine::{adventure::Adventure, game::Game};
 
 #[path = "client/map_renderer.rs"]
 mod map_renderer;
+#[path = "client/map_viewport.rs"]
+mod map_viewport;
 #[path = "client/screens/mod.rs"]
 mod screens;
+#[path = "client/sprite_renderer.rs"]
+mod sprite_renderer;
 #[path = "client/widgets.rs"]
 mod widgets;
 
 use map_renderer::MapRenderer;
+use map_viewport::MapViewport;
+use sprite_renderer::SpriteRenderer;
 use widgets::{DESIGN_HEIGHT, DESIGN_WIDTH, Ui, draw_background};
 
 const ADVENTURES_DIR: &str = "adventures";
@@ -44,15 +50,31 @@ async fn main() {
     let (adventures, catalog_error) = load_adventures();
     let mut screen = Screen::Main;
     let mut selected = 0usize;
-    let mut _game: Option<Game> = None;
+    let mut active_game: Option<Game> = None;
     let mut map_renderer: Option<MapRenderer> = None;
+    let mut map_viewport: Option<MapViewport> = None;
+    let mut sprite_renderer: Option<SpriteRenderer> = None;
+    let mut selected_hex = None;
     let mut launch_error: Option<String> = None;
 
     loop {
         if screen == Screen::Game {
             clear_background(Color::from_rgba(12, 17, 22, 255));
-            if let Some(renderer) = &map_renderer {
-                renderer.draw();
+            if let (Some(renderer), Some(viewport), Some(sprites), Some(game)) = (
+                &map_renderer,
+                &mut map_viewport,
+                &sprite_renderer,
+                &active_game,
+            ) {
+                let screen_size = vec2(screen_width(), screen_height());
+                if let Some(point) = viewport.update(screen_size) {
+                    selected_hex = renderer.hex_at(point);
+                }
+                let elapsed_ms = (get_time() * 1000.0) as u64;
+                renderer.draw_base(viewport);
+                sprites.draw_ground(game.terrain_scene().ground(), viewport, elapsed_ms);
+                sprites.draw_world(game.terrain_scene().world(), viewport, elapsed_ms);
+                renderer.draw_grid(viewport, selected_hex);
             }
             if is_key_pressed(KeyCode::Escape) {
                 screen = Screen::Adventures;
@@ -88,9 +110,28 @@ async fn main() {
                     launch_error = None;
                     match load_game(&adventures[selected].scenarios[0]) {
                         Ok(game) => {
-                            map_renderer = Some(MapRenderer::new(game.map(), game.map_tiles()));
-                            _game = Some(game);
-                            screen = Screen::Game;
+                            let renderer = MapRenderer::new(game.map(), game.map_tiles());
+                            match SpriteRenderer::load(
+                                game.terrain_scene(),
+                                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+                            )
+                            .await
+                            {
+                                Ok(sprites) => {
+                                    let (min, max) = renderer.bounds();
+                                    map_viewport = Some(MapViewport::new(
+                                        min,
+                                        max,
+                                        vec2(screen_width(), screen_height()),
+                                    ));
+                                    map_renderer = Some(renderer);
+                                    sprite_renderer = Some(sprites);
+                                    selected_hex = None;
+                                    active_game = Some(game);
+                                    screen = Screen::Game;
+                                }
+                                Err(error) => launch_error = Some(error),
+                            }
                         }
                         Err(error) => launch_error = Some(error),
                     }
