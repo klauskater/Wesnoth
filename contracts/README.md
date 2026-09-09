@@ -20,6 +20,7 @@ Wesnoth и хранится только как справочный матер�
 - [scenario-data.md](scenario-data.md) — семантика сценарных данных.
 - [platform.md](platform.md) — команды, запросы и события клиента.
 - [campaign.md](campaign.md) — переходы между главами и сохранения.
+- [adventures.md](adventures.md) — обнаружение и формат приключений.
 - [first-battle.md](first-battle.md) — базовый сквозной сценарий и инварианты.
 
 Отличия формата данных от Battle for Wesnoth находятся в

@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::{
     engine::{Engine, Map, Object, World},
@@ -34,10 +30,25 @@ pub struct Game {
     pub name: String,
     pub start_dialog: String,
     engine: Engine,
+    map_tiles: MapTiles,
     dialogs: BTreeMap<String, Vec<DialogLine>>,
     pending_dialog: Option<String>,
     scenario_path: String,
     revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapTile {
+    pub color: [u8; 3],
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapTiles(BTreeMap<String, MapTile>);
+
+impl MapTiles {
+    pub fn get(&self, terrain_code: &str) -> Option<&MapTile> {
+        self.0.get(crate::terrain::gameplay_type(terrain_code))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,18 +109,23 @@ impl Game {
         let map_document = read_wml_from(resources.attribute("map")?, read)?;
         let map_node = one_root(&map_document, "map")?;
         let map = load_map(map_node)?;
-        let mut map_objects = BTreeSet::new();
+        let mut map_tiles = MapTiles::default();
         for path in split_paths(resources.attribute("map_objects")?) {
             let roots = read_wml_from(path, read)?;
             let map_object = one_root(&roots, "map_object")?;
             let id = map_object.attribute("id")?.to_owned();
-            if !map_objects.insert(id.clone()) {
+            let color = map_object
+                .attributes
+                .get("color")
+                .map(|value| parse_color(value))
+                .transpose()?
+                .unwrap_or([96, 96, 96]);
+            if map_tiles.0.insert(id.clone(), MapTile { color }).is_some() {
                 return Err(format!("duplicate map object id: {id}"));
             }
         }
         for cell in &map.cells {
-            let gameplay = crate::terrain::gameplay_type(cell);
-            if !map_objects.contains(gameplay) {
+            if map_tiles.get(cell).is_none() {
                 return Err(format!("map uses unknown map object: {cell}"));
             }
         }
@@ -270,6 +286,7 @@ impl Game {
             name: scenario.attribute("name")?.into(),
             start_dialog: scenario.attribute("on_start_dialog")?.into(),
             engine,
+            map_tiles,
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
             scenario_path: scenario_path.into(),
@@ -412,6 +429,14 @@ impl Game {
             map: self.engine.world.map.clone(),
             objects,
         })
+    }
+
+    pub fn map(&self) -> &Map {
+        &self.engine.world.map
+    }
+
+    pub fn map_tiles(&self) -> &MapTiles {
+        &self.map_tiles
     }
 
     pub fn query(&self, function: &str, command: Value) -> Result<Value, String> {
@@ -591,6 +616,18 @@ fn load_dialogs(nodes: &[Node]) -> Result<BTreeMap<String, Vec<DialogLine>>, Str
     Ok(dialogs)
 }
 
+fn parse_color(value: &str) -> Result<[u8; 3], String> {
+    let value = value.strip_prefix('#').unwrap_or(value);
+    if value.len() != 6 {
+        return Err(format!("invalid map object color: {value}"));
+    }
+    let channel = |start| {
+        u8::from_str_radix(&value[start..start + 2], 16)
+            .map_err(|_| format!("invalid map object color: {value}"))
+    };
+    Ok([channel(0)?, channel(2)?, channel(4)?])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,6 +641,10 @@ mod tests {
     fn loads_first_battle() {
         let game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
         assert_eq!(game.snapshot().unwrap().map.cells.len(), 48);
+        assert_eq!(
+            game.map_tiles().get("grassland").unwrap().color,
+            [111, 145, 77]
+        );
         assert_eq!(game.dialog(&game.start_dialog).unwrap().len(), 2);
         assert_eq!(game.revision(), 0);
     }

@@ -1,3 +1,4 @@
+pub mod adventure;
 #[cfg(feature = "embedded-resources")]
 pub mod embedded;
 pub mod engine;

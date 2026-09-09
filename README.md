@@ -1,21 +1,18 @@
 # Wesnoth Engine
 
 Прототип движка с семью сценариями: три демонстрационных и полностью
-адаптированная кампания «Два брата» из четырёх игровых глав. Графический клиент
-запускает «Оборону заставы»; сценарии переключаются клавишами `F1`–`F7`.
+адаптированная кампания «Два брата» из четырёх игровых глав. Новый графический
+клиент пока содержит главное меню и каталог приключений.
 
 ```powershell
 cargo test
 cargo run
 ```
 
-`cargo run` starts the platform client. Controls: click a player unit, click an
-enemy, choose a weapon with `1`-`9`, press `Enter` to attack, and press `R` to
-restart. Press `E` to end the player turn; Lua then runs the enemy AI and starts
-the next player turn. Dialogs block game commands; advance them with `Enter`, `Space`, or a
-mouse click. After selecting a player unit, click any highlighted hex
-to move. Reachable cells account for the selected unit's remaining movement
-points and terrain costs. The old console demonstration is available as
+`cargo run` запускает платформенный клиент. Он автоматически читает приключения
+из `scripts/adventures`; формат описан в
+[`contracts/adventures.md`](contracts/adventures.md). Старый графический клиент
+сохранён в `archive/legacy_client.rs`, консольная демонстрация доступна через
 `cargo run --bin wesnoth-console`.
 
 В «Обороне заставы» клавиши `Q` и `W` нанимают соответственно первый и второй
@@ -43,7 +40,7 @@ points and terrain costs. The old console demonstration is available as
 две ночные стражи. Законопослушные получают `+25%` днём и `−25%` ночью,
 хаотичные — наоборот, нейтральные не меняются. Эльфы нейтральны, орки хаотичны.
 
-Оба клиента загружают WML из `scripts` и исполняют правила боя на встроенном
+Игровой движок загружает WML из `scripts` и исполняет правила боя на встроенном
 Lua 5.4; ввод и отображение остаются за пределами движка.
 
 Официальный WML не является форматом совместимости. Кампании адаптируются под

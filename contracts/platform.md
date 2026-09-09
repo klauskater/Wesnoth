@@ -7,6 +7,8 @@
 ## Rust-граница
 
 ```text
+Game::map() -> &Map
+Game::map_tiles() -> &MapTiles
 Game::snapshot() -> { map, objects }
 Game::query(function, command) -> Value
 Game::execute(function, command) -> [event]
@@ -222,3 +224,7 @@ battle_resolved {
 
 Конкретные мышь, клавиши, Android gestures, размеры и текстуры не входят в
 контракт движка.
+
+Статическая карта и описания её тайлов читаются один раз при открытии сценария.
+Платформенный `MapRenderer` строит из них локальный кеш и рисует его без вызовов
+Lua и без повторного получения `snapshot` в кадровом цикле.

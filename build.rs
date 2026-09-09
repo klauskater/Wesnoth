@@ -24,8 +24,19 @@ fn main() {
             )
         })
         .collect::<String>();
+    let paths = files
+        .iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(&scripts)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            format!("    {:?},\n", relative)
+        })
+        .collect::<String>();
     let generated = format!(
-        "pub fn get(path: &str) -> Option<&'static str> {{\n    match path.replace('\\\\', \"/\").as_str() {{\n{arms}        _ => None,\n    }}\n}}\n"
+        "pub static PATHS: &[&str] = &[\n{paths}];\n\npub fn paths<'a>(prefix: &'a str) -> impl Iterator<Item = &'static str> + 'a {{\n    PATHS.iter().copied().filter(move |path| path.starts_with(prefix))\n}}\n\npub fn get(path: &str) -> Option<&'static str> {{\n    match path.replace('\\\\', \"/\").as_str() {{\n{arms}        _ => None,\n    }}\n}}\n"
     );
     fs::write(
         Path::new(&env::var("OUT_DIR").unwrap()).join("embedded_scripts.rs"),
