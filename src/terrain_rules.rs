@@ -1,3 +1,14 @@
+//! Минимальный исполнитель правил графики террейна.
+//!
+//! Это не полный terrain-движок Battle for Wesnoth. На вход сюда приходит
+//! упрощённый WML из `scripts/terrain/graphics.wml`, уже без макросов
+//! оригинального препроцессора. `load_rules` разбирает и заранее размножает
+//! вращаемые правила, а `compose` прикладывает их ко всем гексам карты.
+//!
+//! Результат этого модуля — не готовые текстуры, а список `PlacedImage`:
+//! «у такого гекса положить изображение с таким логическим именем и слоем».
+//! Физические PNG выбираются позднее в Android-клиенте.
+
 use std::collections::BTreeSet;
 
 use crate::engine::{Map, Position};
@@ -14,9 +25,9 @@ pub enum TerrainMatch {
 
 impl TerrainMatch {
     fn accepts(&self, terrain: Option<&str>) -> bool {
-        // Wesnoth surrounds a map with its internal off-map terrain.  Keeping
-        // that sentinel here lets edge constraints such as `terrain=*` work
-        // without requiring callers to physically pad every scenario map.
+        // В оригинале карта окружена служебным off-map террейном. Благодаря
+        // этой подстановке правила на краю видят соседа, но реальную карту не
+        // приходится расширять дополнительным кольцом гексов.
         let terrain = terrain.unwrap_or("_offmap");
         match self {
             Self::Any => true,
@@ -30,18 +41,28 @@ impl TerrainMatch {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Constraint {
-    /// Axial offset from the rule anchor. Normalization rotates this in advance.
+    /// Смещение проверяемого гекса от якоря в аксиальных координатах (q, r).
+    /// При загрузке правила оно заранее поворачивается на нужное число граней.
     pub offset: (i32, i32),
+    /// Допустимые и запрещённые WML-коды террейна в этой позиции.
     pub terrain: TerrainMatch,
+    /// Флаги предотвращают повторное использование одной грани несколькими
+    /// правилами — например, чтобы на конце моста не появились и трап, и пирс.
     pub forbid_flags: Vec<String>,
     pub set_flags: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleImage {
+    /// Логическое имя, а не путь к PNG. Например `wood-bridge-dock-n`.
     pub path: String,
+    /// Чем меньше слой, тем раньше рисуется изображение.
     pub layer: i16,
+    /// Вторичный ключ сортировки из оригинального WML.
     pub base: (i16, i16),
+    /// Оригинальная точка привязки большого составного изображения.
+    /// Поле уже читается и сохраняется, но текущий клиент использует свои
+    /// точки привязки в `terrain_anchor`; это важное место для доработки.
     pub center: Option<(i16, i16)>,
 }
 
@@ -79,6 +100,9 @@ pub fn load_rules(source: &str) -> Result<Vec<TerrainRule>, String> {
         if probability > 100 {
             return Err(format!("probability exceeds 100 in {id}"));
         }
+        // rotations=6 создаёт шесть вариантов одного шаблона. rotation_turns
+        // позволяет оставить только нужные повороты: для прямого моста это
+        // обычно две противоположные стороны, например N и S.
         let turns = if let Some(value) = node.attributes.get("rotation_turns") {
             csv(value)
                 .map(|turn| {
@@ -99,6 +123,8 @@ pub fn load_rules(source: &str) -> Result<Vec<TerrainRule>, String> {
         if turns.is_empty() || turns.iter().any(|turn| *turn > 5) {
             return Err(format!("rotations must select turns 0..=5 in {id}"));
         }
+        // Имена направлений подставляются в @R0, @R1 и т. д. Они могут быть
+        // стандартными n/ne/se/s/sw/nw либо специальными именами углов стен.
         let rotation_names = node
             .attributes
             .get("rotation_names")
@@ -231,8 +257,16 @@ fn rotated(value: &str, turn: u8, names: &[String]) -> String {
     })
 }
 
-/// Executes already-normalized terrain rules in source order, like Wesnoth's
-/// builder. Macro expansion and six-way rotation belong in the offline packer.
+/// Применяет нормализованные правила в порядке их записи в WML.
+///
+/// Для каждого правила перебираются все гексы, каждый гекс считается якорем
+/// шаблона. Все `constraint` должны совпасть одновременно. После совпадения
+/// выставляются флаги и добавляются изображения. Порядок важен: более частный
+/// вариант должен стоять в WML раньше общего и «захватить» нужный флаг.
+///
+/// `seed` делает вероятность детерминированной: одна карта не меняет декор при
+/// каждом кадре. Макросы оригинального Wesnoth здесь не исполняются — нужные
+/// правила записываются напрямую в компактном `graphics.wml`.
 pub fn compose(map: &Map, rules: &[TerrainRule], seed: u64) -> Vec<PlacedImage> {
     let mut flags = BTreeSet::new();
     let mut images = Vec::new();
@@ -240,6 +274,8 @@ pub fn compose(map: &Map, rules: &[TerrainRule], seed: u64) -> Vec<PlacedImage> 
         for y in 1..=map.height as i64 {
             for x in 1..=map.width as i64 {
                 let anchor = Position { x, y };
+                // offset() переводит аксиальное смещение шаблона в систему
+                // карты, где чётные 1-based столбцы подняты на полгекса.
                 let matched = rule.constraints.iter().all(|constraint| {
                     let position = offset(anchor, constraint.offset);
                     constraint.terrain.accepts(map.raw(position).ok())
@@ -281,11 +317,11 @@ pub fn rotate(offset: (i32, i32), turns: u8) -> (i32, i32) {
 
 fn offset(anchor: Position, delta: (i32, i32)) -> Position {
     let q = anchor.x - 1 + delta.0 as i64;
-    let anchor_r = anchor.y - 1 - ((anchor.x - 1) - ((anchor.x - 1) & 1)) / 2;
+    let anchor_r = anchor.y - 1 - ((anchor.x - 1) + ((anchor.x - 1) & 1)) / 2;
     let r = anchor_r + delta.1 as i64;
     Position {
         x: q + 1,
-        y: r + (q - (q & 1)) / 2 + 1,
+        y: r + (q + (q & 1)) / 2 + 1,
     }
 }
 
@@ -374,7 +410,7 @@ mod tests {
             probability: 100,
             constraints: vec![
                 constraint((0, 0), &["wall-ne"], &[]),
-                constraint((1, 0), &[], &[]),
+                constraint((1, -1), &[], &[]),
             ],
             images: vec![image("wall.png", 0)],
         };

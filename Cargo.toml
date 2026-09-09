@@ -14,6 +14,15 @@ mlua = { version = "0.10", features = ["lua54", "vendored"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Android development APKs are what we install during play-testing. Leaving
+# them at Cargo's opt-level 0 makes Lua/Rust value conversion and pathfinding
+# many times slower than the shipped game.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [[bin]]
 name = "wesnoth-console"
 path = "src/main.rs"
@@ -21,6 +30,10 @@ path = "src/main.rs"
 [[bin]]
 name = "wesnoth-client"
 path = "src/bin/client.rs"
+
+[[bin]]
+name = "terrain-viewer"
+path = "src/bin/terrain_viewer.rs"
 
 [[bin]]
 name = "wesnoth-android"

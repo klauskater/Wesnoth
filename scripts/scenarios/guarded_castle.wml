@@ -1,7 +1,7 @@
 [scenario]
     id=03_guarded_castle
     name="Охраняемый замок"
-    objective="Проникните в замок и спасите Барана"
+    objective="Проникните в замок, убейте Ротарика и освободите Барана"
     next_scenario=04_return_to_the_village
     campaign_side=player
     carryover_percentage=40
@@ -11,11 +11,12 @@
     village_income=2
     village_support=1
     village_heal=8
+    vision_radius=8
 
     [resources]
         map=maps/guarded_castle.wml
-        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
-        unit_types=units/knight.wml,units/spearman.wml,units/bowman.wml,units/red_mage.wml,units/dark_sorcerer.wml,units/walking_corpse.wml,units/orcish_grunt.wml,units/orcish_warrior.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/core-1.18.8.wml
         dialogs=dialogs/guarded_castle.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
     [/resources]
@@ -24,106 +25,133 @@
     [side]
         id=player
         controller=human
-        gold=120
-        recruit=spearman,bowman
+        team_name=good
+        shroud=yes
+        gold=170
+        recruit=Horseman,Bowman,Spearman,Footpad
     [/side]
     [side]
-        id=enemy
+        id=undead
         controller=ai
-        passive_leader=yes
+        team_name=evil
+        gold=30
+        income=-2
+        recruit=Skeleton,Skeleton Archer,Vampire Bat,Dark Adept,Ghoul,Walking Corpse
+    [/side]
+    [side]
+        id=orcs
+        controller=ai
+        team_name=evil
+        defeat_condition=never
         gold=0
     [/side]
 
     [unit]
         id=Arvith
         name="Арвит"
-        type=knight
+        type=Knight
         side=player
         is_leader=yes
-        x=4
-        y=9
-    [/unit]
-    [unit]
-        id=Guard_leader
-        name="Страж"
-        type=orcish_warrior
-        side=enemy
-        x=4
-        y=6
-        event_group=first_gate
-    [/unit]
-    [unit]
-        id=castle_guard
-        name="Страж замка"
-        type=orcish_grunt
-        side=enemy
-        x=8
-        y=6
-        event_group=first_gate
+        x=35
+        y=31
     [/unit]
     [unit]
         id=Rotharik
         name="Ротарик"
-        type=dark_sorcerer
-        side=enemy
+        type=Dark Sorcerer
+        side=undead
         is_leader=yes
-        x=10
-        y=3
+        x=20
+        y=6
     [/unit]
     [unit]
-        id=undead_guard_one
-        type=walking_corpse
-        side=enemy
-        x=8
-        y=3
+        id=Guard_leader
+        name="Страж"
+        type=Assassin
+        side=undead
+        x=28
+        y=26
+        event_group=first_gate
     [/unit]
     [unit]
-        id=undead_guard_two
-        type=walking_corpse
-        side=enemy
-        x=10
-        y=4
+        id=gate_guard
+        name="Страж"
+        type=Bandit
+        side=undead
+        x=30
+        y=25
+        event_group=first_gate
+    [/unit]
+    [unit]
+        id=Knago-Brek
+        name="Кнаго-Брек"
+        type=Orcish Warrior
+        side=orcs
+        x=19
+        y=17
+    [/unit]
+    [unit]
+        id=orc_guard_1
+        type=Orcish Grunt
+        side=orcs
+        x=18
+        y=16
+    [/unit]
+    [unit]
+        id=orc_guard_2
+        type=Orcish Grunt
+        side=orcs
+        x=20
+        y=16
+    [/unit]
+    [unit]
+        id=Guard2_leader
+        name="Страж"
+        type=Rogue
+        side=undead
+        x=16
+        y=24
+        reserve_group=second_guard
+        event_group=second_gate
+    [/unit]
+    [unit]
+        id=second_guard_thug
+        type=Thug
+        side=undead
+        x=17
+        y=24
+        reserve_group=second_guard
+        event_group=second_gate
+    [/unit]
+    [unit]
+        id=second_guard_bandit
+        type=Bandit
+        side=undead
+        x=16
+        y=23
+        reserve_group=second_guard
+        event_group=second_gate
     [/unit]
     [unit]
         id=Baran
         name="Баран"
-        type=red_mage
+        type=Red Mage
         side=player
-        x=3
-        y=2
+        x=5
+        y=5
         reserve_group=prisoner
         upkeep=loyal
-    [/unit]
-    [unit]
-        id=relief_leader
-        name="Сменный караул"
-        type=orcish_warrior
-        side=enemy
-        x=3
-        y=8
-        reserve_group=second_guard
-        event_group=second_gate
-    [/unit]
-    [unit]
-        id=relief_guard
-        type=orcish_grunt
-        side=enemy
-        x=4
-        y=8
-        reserve_group=second_guard
-        event_group=second_gate
     [/unit]
 
     [phase]
         id=approach
-        label="Доберитесь до входа в замок"
+        label="Назовите первый пароль внешней страже"
         when=unit_reaches
-        side=player
-        x=6
-        y=6
+        unit=Arvith
+        x=33
+        y=29
         choice=first_password
     [/phase]
-
     [choice]
         id=first_password
         dialog=first_password_prompt
@@ -167,35 +195,24 @@
             id=Katklagad
         [/option]
     [/choice]
-
     [turn_event]
-        id=guard_shift
-        turn=3
+        id=second_guard_arrives
+        turn=6
         spawn_group=second_guard
         choice=second_password
     [/turn_event]
-
     [location_event]
         id=treasury
         side=player
-        x=5
-        y=5
-        gold=50
+        x=34
+        y=4
+        gold=100
         achievement=treasure
         dialog=treasury_found
     [/location_event]
-    [location_event]
-        id=evil_altar
-        side=player
-        x=4
-        y=5
-        damage=8
-        status=poisoned
-        dialog=altar_triggered
-    [/location_event]
     [phase]
         id=defeat_rotharik
-        label="Победите Ротарика и заберите ключ"
+        label="Убейте Ротарика и заберите ключ от темницы"
         when=unit_defeated
         unit=Rotharik
         next=free_baran
@@ -207,8 +224,8 @@
         spawn_group=prisoner
         when=unit_reaches
         unit=Arvith
-        x=4
-        y=2
+        x=6
+        y=5
         result=victory
         finish_dialog=castle_victory
     [/phase]
@@ -228,7 +245,7 @@
     [objective]
         result=defeat
         when=turn_limit
-        turn=24
+        turn=30
         dialog=castle_defeat
     [/objective]
 [/scenario]

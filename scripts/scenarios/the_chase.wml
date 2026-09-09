@@ -1,7 +1,7 @@
 [scenario]
     id=02_the_chase
     name="Погоня"
-    objective="Пробейтесь через лес и настигните похитителей"
+    objective="Пробейтесь через Серый лес и настигните похитителей"
     next_scenario=03_guarded_castle
     campaign_side=player
     carryover_percentage=40
@@ -11,11 +11,12 @@
     village_income=2
     village_support=1
     village_heal=8
+    vision_radius=8
 
     [resources]
         map=maps/the_chase.wml
-        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
-        unit_types=units/knight.wml,units/spearman.wml,units/bowman.wml,units/dark_sorcerer.wml,units/walking_corpse.wml,units/elvish_fighter.wml,units/elvish_archer.wml,units/elvish_hero.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/core-1.18.8.wml
         dialogs=dialogs/the_chase.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
     [/resources]
@@ -24,90 +25,119 @@
     [side]
         id=player
         controller=human
-        gold=120
-        recruit=spearman,bowman
+        team_name=good
+        shroud=yes
+        gold=180
+        income=10
+        recruit=Horseman,Bowman,Spearman,Footpad
     [/side]
     [side]
-        id=enemy
+        id=elves
         controller=ai
+        team_name=elves
+        gold=25
+        income=-8
+        recruit=Elvish Scout
+    [/side]
+    [side]
+        id=kidnappers
+        controller=ai
+        team_name=elves
         passive_leader=yes
+        defeat_condition=no_leader_left
         gold=0
     [/side]
 
     [unit]
         id=Arvith
         name="Арвит"
-        type=knight
+        type=Knight
         side=player
         is_leader=yes
-        x=2
-        y=10
+        x=10
+        y=51
     [/unit]
     [unit]
         id=Nil-Galion
         name="Нил-Галион"
-        type=elvish_hero
-        side=enemy
+        type=Elvish Rider
+        side=elves
         is_leader=yes
-        x=10
-        y=1
+        x=6
+        y=24
     [/unit]
     [unit]
-        id=elf_scout_one
-        type=elvish_archer
-        side=enemy
+        id=elf_scout_1
+        type=Elvish Scout
+        side=elves
+        x=15
+        y=20
+    [/unit]
+    [unit]
+        id=elf_fighter
+        type=Elvish Fighter
+        side=elves
         x=5
-        y=7
+        y=13
     [/unit]
     [unit]
-        id=elf_scout_two
-        type=elvish_fighter
-        side=enemy
-        x=8
-        y=5
+        id=elf_scout_2
+        type=Elvish Scout
+        side=elves
+        x=4
+        y=36
+    [/unit]
+    [unit]
+        id=elf_scout_3
+        type=Elvish Scout
+        side=elves
+        x=7
+        y=46
+    [/unit]
+    [unit]
+        id=elf_scout_4
+        type=Elvish Scout
+        side=elves
+        x=15
+        y=35
     [/unit]
     [unit]
         id=Muff_Toras
         name="Мафф Торас"
-        type=dark_sorcerer
-        side=enemy
+        type=Dark Adept
+        side=kidnappers
+        is_leader=yes
         x=9
-        y=2
-        reserve_group=kidnappers
+        y=5
     [/unit]
     [unit]
-        id=kidnapper_guard_one
-        type=walking_corpse
-        side=enemy
-        x=8
-        y=2
-        reserve_group=kidnappers
+        id=summoned_skeleton_1
+        type=Skeleton
+        side=kidnappers
+        x=9
+        y=3
+        reserve_group=muff_summons
     [/unit]
     [unit]
-        id=kidnapper_guard_two
-        type=walking_corpse
-        side=enemy
+        id=summoned_skeleton_2
+        type=Skeleton
+        side=kidnappers
         x=10
-        y=2
-        reserve_group=kidnappers
+        y=5
+        reserve_group=muff_summons
     [/unit]
 
-    [phase]
-        id=search_woods
-        label="Достигните северной опушки"
-        when=unit_reaches
-        side=player
-        x=6
-        y=2
-        next=catch_kidnappers
-    [/phase]
-    [phase]
-        id=catch_kidnappers
-        label="Победите Маффа Тораса"
-        spawn_group=kidnappers
+    [sight_event]
+        id=kidnappers_found
+        viewer_side=player
+        target=Muff_Toras
+        spawn_group=muff_summons
+        set_team_side=kidnappers
+        set_team_name=evil
+        ally_side=elves
+        ally_team_name=good
         dialog=kidnappers_found
-    [/phase]
-
+    [/sight_event]
     [turn_event]
         id=keep_chasing
         turn=12
@@ -120,11 +150,11 @@
         dialog=chase_victory
         [campaign_variable]
             name=first_password
-            value=Sithrak
+            options=Sithrak,Eleben,Jarlom,Hamik
         [/campaign_variable]
         [campaign_variable]
             name=second_password
-            value=Akranbral
+            options=Akranbral,Drakanal,Xaskanat,Katklagad
         [/campaign_variable]
     [/objective]
     [objective]
@@ -136,7 +166,7 @@
     [objective]
         result=defeat
         when=turn_limit
-        turn=24
+        turn=28
         dialog=chase_time_over
     [/objective]
 [/scenario]

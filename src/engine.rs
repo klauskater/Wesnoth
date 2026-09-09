@@ -42,7 +42,9 @@ impl Map {
         fn axial(position: Position) -> (i64, i64, i64) {
             let q = position.x - 1;
             let row = position.y - 1;
-            let r = row - (q - (q & 1)) / 2;
+            // В WML чётный 1-based столбец расположен на полгекса выше
+            // нечётного. В zero-based координатах это верхний odd-q.
+            let r = row - (q + (q & 1)) / 2;
             (q, r, -q - r)
         }
         let a = axial(a);
@@ -51,10 +53,27 @@ impl Map {
     }
 
     pub fn neighbors(&self, position: Position) -> Vec<Position> {
-        (1..=self.height as i64)
-            .flat_map(|y| (1..=self.width as i64).map(move |x| Position { x, y }))
-            .filter(|candidate| self.are_adjacent(position, *candidate))
-            .collect()
+        let diagonal_y = if position.x % 2 == 0 { -1 } else { 1 };
+        [
+            (-1, 0),
+            (-1, diagonal_y),
+            (0, -1),
+            (0, 1),
+            (1, 0),
+            (1, diagonal_y),
+        ]
+        .into_iter()
+        .map(|(x, y)| Position {
+            x: position.x + x,
+            y: position.y + y,
+        })
+        .filter(|candidate| {
+            candidate.x >= 1
+                && candidate.y >= 1
+                && candidate.x <= self.width as i64
+                && candidate.y <= self.height as i64
+        })
+        .collect()
     }
 }
 
@@ -111,16 +130,38 @@ struct Transaction {
 pub struct Engine {
     pub world: World,
     random: DeterministicRandom,
-    rule_source: String,
+    lua: Rc<Lua>,
+    shared_state: Rc<BTreeMap<String, Value>>,
 }
 
 impl Engine {
-    pub fn new(world: World, seed: u64, rule_source: String) -> Self {
-        Self {
+    pub fn new(mut world: World, seed: u64, rule_source: String) -> Result<Self, String> {
+        // ponytail: immutable catalogs are shared between transactions. Cloning
+        // them for every click made the full unit catalog dominate input latency.
+        let shared_state = ["unit_types", "races", "traits"]
+            .into_iter()
+            .filter_map(|key| world.state.remove(key).map(|value| (key.into(), value)))
+            .collect();
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())
+            .map_err(|error| error.to_string())?;
+        for unsafe_global in ["io", "os", "package", "dofile", "loadfile", "require"] {
+            lua.globals()
+                .set(unsafe_global, mlua::Value::Nil)
+                .map_err(|error| error.to_string())?;
+        }
+        let module: Table = lua
+            .load(&rule_source)
+            .set_name("scenario_rules.lua")
+            .eval()
+            .map_err(|error| error.to_string())?;
+        lua.set_named_registry_value("wesnoth.rule_module", module)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
             world,
             random: DeterministicRandom::new(seed),
-            rule_source,
-        }
+            lua: Rc::new(lua),
+            shared_state: Rc::new(shared_state),
+        })
     }
 
     pub(crate) fn saved_state(&self) -> (BTreeMap<String, Object>, BTreeMap<String, Value>, u64) {
@@ -142,24 +183,17 @@ impl Engine {
         self.random.state = random_state;
     }
 
-    pub fn execute(&mut self, function: &str, command: Value) -> Result<Value, String> {
-        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())
-            .map_err(|error| error.to_string())?;
-        for unsafe_global in ["io", "os", "package", "dofile", "loadfile", "require"] {
-            lua.globals()
-                .set(unsafe_global, mlua::Value::Nil)
-                .map_err(|error| error.to_string())?;
-        }
+    fn evaluate(&self, function: &str, command: Value) -> Result<(Value, Transaction), String> {
+        let lua = Rc::clone(&self.lua);
 
         let transaction = Rc::new(RefCell::new(Transaction {
             world: self.world.clone(),
             random: self.random.clone(),
         }));
-        let context = create_context(&lua, Rc::clone(&transaction)).map_err(|e| e.to_string())?;
+        let context = create_context(&lua, Rc::clone(&transaction), Rc::clone(&self.shared_state))
+            .map_err(|e| e.to_string())?;
         let module: Table = lua
-            .load(&self.rule_source)
-            .set_name("scenario_rules.lua")
-            .eval()
+            .named_registry_value("wesnoth.rule_module")
             .map_err(|error| error.to_string())?;
         let resolve: mlua::Function = module.get(function).map_err(|e| e.to_string())?;
         let result = resolve
@@ -168,13 +202,26 @@ impl Engine {
             .map_err(|error| error.to_string())?;
 
         let committed = transaction.borrow().clone();
+        Ok((result, committed))
+    }
+
+    pub fn query(&self, function: &str, command: Value) -> Result<Value, String> {
+        self.evaluate(function, command).map(|(result, _)| result)
+    }
+
+    pub fn execute(&mut self, function: &str, command: Value) -> Result<Value, String> {
+        let (result, committed) = self.evaluate(function, command)?;
         self.world = committed.world;
         self.random = committed.random;
         Ok(result)
     }
 }
 
-fn create_context(lua: &Lua, transaction: Rc<RefCell<Transaction>>) -> mlua::Result<Table> {
+fn create_context(
+    lua: &Lua,
+    transaction: Rc<RefCell<Transaction>>,
+    shared_state: Rc<BTreeMap<String, Value>>,
+) -> mlua::Result<Table> {
     let context = lua.create_table()?;
 
     let objects = lua.create_table()?;
@@ -263,13 +310,13 @@ fn create_context(lua: &Lua, transaction: Rc<RefCell<Transaction>>) -> mlua::Res
     state_api.set(
         "get",
         lua.create_function(move |lua, (_self, key): (Table, String)| {
+            let state = state.borrow();
             state
-                .borrow()
                 .world
                 .state
                 .get(&key)
-                .cloned()
-                .unwrap_or(Value::Nil)
+                .or_else(|| shared_state.get(&key))
+                .unwrap_or(&Value::Nil)
                 .to_lua(lua)
         })?,
     )?;
@@ -371,7 +418,19 @@ mod tests {
             cells: vec!["g".into(); 15],
         };
         assert!(map.are_adjacent(Position { x: 2, y: 2 }, Position { x: 3, y: 2 }));
+        assert!(map.are_adjacent(Position { x: 2, y: 2 }, Position { x: 1, y: 1 }));
+        assert!(!map.are_adjacent(Position { x: 2, y: 2 }, Position { x: 1, y: 3 }));
         assert!(!map.are_adjacent(Position { x: 1, y: 1 }, Position { x: 3, y: 1 }));
+        for position in [Position { x: 2, y: 2 }, Position { x: 3, y: 2 }] {
+            let neighbors = map.neighbors(position);
+            assert_eq!(neighbors.len(), 6);
+            assert!(
+                neighbors
+                    .iter()
+                    .all(|neighbor| map.are_adjacent(position, *neighbor))
+            );
+        }
+        assert_eq!(map.neighbors(Position { x: 1, y: 1 }).len(), 3);
     }
 
     #[test]

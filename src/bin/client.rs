@@ -4,14 +4,19 @@ use std::path::PathBuf;
 
 use macroquad::prelude::*;
 #[cfg(any(target_os = "android", test))]
-use wesnoth_engine::terrain::VisualKind;
+use wesnoth_engine::terrain::{VisualKind, castle_wall_anchor, mountain_range_anchor};
 #[cfg(target_os = "android")]
-use wesnoth_engine::terrain::build_visuals;
+use wesnoth_engine::terrain::{build_visuals, mask_castle_wall};
 use wesnoth_engine::{
     engine::{Map, Position},
     game::{DialogLine, Game, GameSnapshot},
     value::Value,
 };
+
+#[cfg(any(target_os = "android", test))]
+mod core_unit_art {
+    include!(concat!(env!("OUT_DIR"), "/embedded_unit_art.rs"));
+}
 
 const HEX_RADIUS: f32 = 36.0;
 const MAP_ORIGIN: Vec2 = vec2(65.0, 75.0);
@@ -21,10 +26,8 @@ const PANEL_X: f32 = 800.0;
 const ANDROID_PANEL_WIDTH: f32 = 420.0;
 #[cfg(target_os = "android")]
 const ANDROID_TOP_BAR_HEIGHT: f32 = 84.0;
-#[cfg(any(target_os = "android", test))]
-const ANDROID_TAP_SLOP: f32 = 24.0;
 #[cfg(target_os = "android")]
-const DEBUG_CASTLE_TILES: bool = true;
+const ANDROID_TAP_SLOP: f32 = 24.0;
 const SCENARIOS: [&str; 7] = [
     "scenarios/first_battle.wml",
     "scenarios/crossing.wml",
@@ -36,14 +39,39 @@ const SCENARIOS: [&str; 7] = [
 ];
 
 #[cfg(target_os = "android")]
-const SCENARIO_NAMES: [&str; 7] = [
-    "Первая битва",
-    "Переправа",
-    "Оборона заставы",
-    "Искоренение мага",
-    "Погоня",
-    "Охраняемый замок",
-    "Возвращение в деревню",
+struct ScenarioCard {
+    source_index: usize,
+    title: &'static str,
+    objective: &'static str,
+    description: &'static str,
+}
+
+#[cfg(target_os = "android")]
+const CAMPAIGN_SCENARIOS: [ScenarioCard; 4] = [
+    ScenarioCard {
+        source_index: 3,
+        title: "Искоренение мага",
+        objective: "Убейте Мордака; гибель Арвита или окончание 18-го хода означает поражение.",
+        description: "Арвит отправляется на поиски пропавшего брата и сталкивается с тёмным магом.",
+    },
+    ScenarioCard {
+        source_index: 4,
+        title: "Погоня",
+        objective: "Пробейтесь через лес и настигните похитителей.",
+        description: "След ведёт отряд через лес, где противник готовит новые засады.",
+    },
+    ScenarioCard {
+        source_index: 5,
+        title: "Охраняемый замок",
+        objective: "Проникните в замок и спасите Барана.",
+        description: "Путь к пленнику перекрывает укреплённый замок с многочисленной стражей.",
+    },
+    ScenarioCard {
+        source_index: 6,
+        title: "Возвращение в деревню",
+        objective: "Найдите старосту Хобана.",
+        description: "Братья возвращаются домой, но родные земли уже охвачены войной.",
+    },
 ];
 
 #[cfg(target_os = "android")]
@@ -65,6 +93,38 @@ struct MissionResult {
 struct ClientSettings {
     show_grid: bool,
     show_fps: bool,
+}
+
+#[cfg(target_os = "android")]
+struct TodLighting {
+    color: Vec3,
+    initialized: bool,
+}
+
+#[cfg(target_os = "android")]
+impl TodLighting {
+    fn new() -> Self {
+        Self {
+            color: Vec3::ONE,
+            initialized: false,
+        }
+    }
+
+    fn update(&mut self, time_of_day: &str) {
+        let target = tod_color(time_of_day);
+        if !self.initialized {
+            self.color = target;
+            self.initialized = true;
+        } else {
+            self.color = self
+                .color
+                .lerp(target, 1.0 - (-get_frame_time() * 4.0).exp());
+        }
+    }
+
+    fn tint(&self) -> Color {
+        Color::new(self.color.x, self.color.y, self.color.z, 1.0)
+    }
 }
 
 struct DialogView {
@@ -96,7 +156,9 @@ struct ClientSnapshot {
     recall_options: Vec<RecruitOption>,
     recall_units: Vec<String>,
     villages: Vec<VillageView>,
+    #[cfg(not(target_os = "android"))]
     village_income: i64,
+    #[cfg(not(target_os = "android"))]
     gross_income: i64,
     expenses: i64,
     net_income: i64,
@@ -112,6 +174,8 @@ struct ClientSnapshot {
 struct AdvancementView {
     unit: String,
     options: Vec<String>,
+    #[cfg(target_os = "android")]
+    details: Vec<RecruitOption>,
 }
 
 struct VillageView {
@@ -124,6 +188,8 @@ struct ObjectView {
     #[cfg(target_os = "android")]
     type_id: String,
     side: String,
+    #[cfg(target_os = "android")]
+    is_leader: bool,
     position: Position,
     hitpoints: i64,
     max_hitpoints: i64,
@@ -133,10 +199,15 @@ struct ObjectView {
     level: i64,
     experience: i64,
     max_experience: i64,
+    #[cfg(not(target_os = "android"))]
     poisoned: bool,
+    #[cfg(not(target_os = "android"))]
     slowed: bool,
+    #[cfg(not(target_os = "android"))]
     petrified: bool,
+    #[cfg(not(target_os = "android"))]
     unhealable: bool,
+    #[cfg(not(target_os = "android"))]
     stunned: bool,
     movement_costs: std::collections::BTreeMap<String, i64>,
     #[cfg(target_os = "android")]
@@ -147,8 +218,11 @@ struct ObjectView {
 
 struct ReachableCell {
     position: Position,
+    #[cfg(target_os = "android")]
     path: Vec<Position>,
+    #[cfg(target_os = "android")]
     cost: i64,
+    #[cfg(target_os = "android")]
     stopped_by_zoc: bool,
 }
 
@@ -159,6 +233,174 @@ struct MovePreview {
     cost: i64,
     defense: i64,
     stopped_by_zoc: bool,
+}
+
+#[cfg(target_os = "android")]
+struct AnimationActor {
+    type_id: String,
+    position: Position,
+}
+
+#[cfg(any(target_os = "android", test))]
+enum VisualClip {
+    Move {
+        unit: String,
+        path: Vec<Position>,
+    },
+    Strike {
+        source: String,
+        target: String,
+        hit: bool,
+    },
+}
+
+#[cfg(target_os = "android")]
+#[derive(Default)]
+struct AnimationPlayer {
+    queue: std::collections::VecDeque<VisualClip>,
+    actors: std::collections::BTreeMap<String, AnimationActor>,
+    started_at: f64,
+}
+
+#[cfg(target_os = "android")]
+impl AnimationPlayer {
+    fn enqueue(&mut self, events: &[Value], snapshot: &ClientSnapshot) {
+        let was_idle = self.queue.is_empty();
+        for event in events {
+            match event.get("type").and_then(Value::as_str) {
+                Some("object_moved") => {
+                    let Some(unit) = string(event, "object") else {
+                        continue;
+                    };
+                    let mut path = position(event, "from").into_iter().collect::<Vec<_>>();
+                    path.extend(
+                        list(event, "path")
+                            .unwrap_or(&[])
+                            .iter()
+                            .filter_map(position_from_value),
+                    );
+                    if let Some(to) = position(event, "to")
+                        && path.last() != Some(&to)
+                    {
+                        path.push(to);
+                    }
+                    if path.len() > 1 {
+                        self.capture_actor(&unit, snapshot, path[0]);
+                        self.queue.push_back(VisualClip::Move { unit, path });
+                    }
+                }
+                Some("battle_resolved") => {
+                    for strike in list(event, "strikes").unwrap_or(&[]) {
+                        let (Some(source), Some(target)) =
+                            (string(strike, "source"), string(strike, "target"))
+                        else {
+                            continue;
+                        };
+                        if let Some(actor) = snapshot.objects.iter().find(|unit| unit.id == source)
+                        {
+                            self.capture_actor(&source, snapshot, actor.position);
+                        }
+                        if let Some(actor) = snapshot.objects.iter().find(|unit| unit.id == target)
+                        {
+                            self.capture_actor(&target, snapshot, actor.position);
+                        }
+                        self.queue.push_back(VisualClip::Strike {
+                            source,
+                            target,
+                            hit: matches!(strike.get("hit"), Some(Value::Bool(true))),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        if was_idle && !self.queue.is_empty() {
+            self.started_at = get_time();
+        }
+    }
+
+    fn capture_actor(&mut self, id: &str, snapshot: &ClientSnapshot, position: Position) {
+        if let Some(unit) = snapshot.objects.iter().find(|unit| unit.id == id) {
+            self.actors
+                .entry(id.to_owned())
+                .or_insert_with(|| AnimationActor {
+                    type_id: unit.type_id.clone(),
+                    position,
+                });
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn pose(&self, id: &str) -> Option<(Vec2, Color)> {
+        let actor = self.actors.get(id)?;
+        let mut point = hex_center(actor.position.x, actor.position.y);
+        let mut tint = WHITE;
+        let clip = self.queue.front()?;
+        let progress = ((get_time() - self.started_at) / clip.duration()).clamp(0.0, 1.0) as f32;
+        match clip {
+            VisualClip::Move { unit, path } if unit == id => {
+                let cursor = progress * (path.len() - 1) as f32;
+                let index = (cursor.floor() as usize).min(path.len() - 2);
+                let from = hex_center(path[index].x, path[index].y);
+                let to = hex_center(path[index + 1].x, path[index + 1].y);
+                point = from.lerp(to, cursor - index as f32);
+            }
+            VisualClip::Strike { source, target, .. } if source == id => {
+                if let Some(target) = self.actors.get(target) {
+                    let target = hex_center(target.position.x, target.position.y);
+                    point = point.lerp(target, (progress * std::f32::consts::PI).sin() * 0.24);
+                }
+            }
+            VisualClip::Strike { target, hit, .. } if target == id && *hit => {
+                point.x += (progress * std::f32::consts::PI * 8.0).sin() * 3.0;
+                if (0.35..0.75).contains(&progress) {
+                    tint = Color::from_rgba(255, 100, 100, 255);
+                }
+            }
+            _ => {}
+        }
+        Some((point, tint))
+    }
+
+    fn focus(&self) -> Option<Vec2> {
+        match self.queue.front()? {
+            VisualClip::Move { unit, .. } => self.pose(unit).map(|pose| pose.0),
+            VisualClip::Strike { source, .. } => self.pose(source).map(|pose| pose.0),
+        }
+    }
+
+    fn update(&mut self) {
+        loop {
+            let Some(clip) = self.queue.front() else {
+                self.actors.clear();
+                return;
+            };
+            let duration = clip.duration();
+            if get_time() - self.started_at < duration {
+                return;
+            }
+            if let VisualClip::Move { unit, path } = clip
+                && let (Some(actor), Some(position)) = (self.actors.get_mut(unit), path.last())
+            {
+                actor.position = *position;
+            }
+            self.queue.pop_front();
+            self.started_at += duration;
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+impl VisualClip {
+    fn duration(&self) -> f64 {
+        match self {
+            Self::Move { path, .. } => ((path.len() - 1) as f64 * 0.12).max(0.18),
+            Self::Strike { .. } => 0.28,
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -216,16 +458,20 @@ struct AvailableActions {
 }
 
 #[cfg(target_os = "android")]
+// Все ресурсы Android-рендерера загружаются один раз при старте. Имена полей
+// соответствуют семействам VisualKind/VisualTile из terrain.rs. Направленные
+// массивы всегда имеют порядок N, NE, SE, S, SW, NW.
 struct AndroidArt {
+    menu_background: Texture2D,
     terrain: std::collections::BTreeMap<&'static str, Texture2D>,
+    night_villages: std::collections::BTreeMap<&'static str, Texture2D>,
     water_edges: [Texture2D; 6],
     transitions: std::collections::BTreeMap<&'static str, [Texture2D; 6]>,
     green_transition_runs: std::collections::BTreeMap<u8, Texture2D>,
-    castle_convex: [Texture2D; 6],
-    castle_concave: [Texture2D; 6],
-    keep_convex: [Texture2D; 6],
-    keep_concave: [Texture2D; 6],
-    ocean_water: [Texture2D; 3],
+    castle_walls: std::collections::BTreeMap<&'static str, [Texture2D; 6]>,
+    ocean_water: [Texture2D; 9],
+    windmill: [Texture2D; 18],
+    village_flags: std::collections::BTreeMap<&'static str, [Vec<Texture2D>; 2]>,
     wood_bridge_ends: [Texture2D; 6],
     wood_bridge_docks: [Texture2D; 6],
     stone_bridge_ends: [Texture2D; 6],
@@ -243,6 +489,42 @@ impl AndroidArt {
             texture.set_filter(FilterMode::Nearest);
             texture
         }
+        let menu_background = Texture2D::from_file_with_format(
+            include_bytes!("../../assets/wesnoth/ui/titlescreen.png"),
+            Some(ImageFormat::Png),
+        );
+        menu_background.set_filter(FilterMode::Linear);
+        fn castle_textures(bytes: [&'static [u8]; 6], mask: &Image) -> [Texture2D; 6] {
+            let corners = [5, 0, 1, 2, 3, 4]; // порядок файлов: tl,tr,r,br,bl,l
+            std::array::from_fn(|index| {
+                let mut image = Image::from_file_with_format(bytes[index], Some(ImageFormat::Png))
+                    .expect("bundled castle wall must be a PNG");
+                let (width, height) = (image.width as usize, image.height as usize);
+                mask_castle_wall(&mut image.bytes, width, height, &mask.bytes, corners[index]);
+                let texture = Texture2D::from_image(&image);
+                texture.set_filter(FilterMode::Nearest);
+                texture
+            })
+        }
+        fn team_flag(bytes: &'static [u8], color: Color) -> Texture2D {
+            let mut image = Image::from_file_with_format(bytes, Some(ImageFormat::Png))
+                .expect("bundled village flag must be a PNG");
+            for pixel in image.bytes.chunks_exact_mut(4) {
+                let (red, green, blue) = (pixel[0], pixel[1], pixel[2]);
+                if green > red.saturating_add(20) && green > blue.saturating_add(20) {
+                    let shade = (green as f32 / 221.0).min(1.0);
+                    pixel[0] = (color.r * shade * 255.0) as u8;
+                    pixel[1] = (color.g * shade * 255.0) as u8;
+                    pixel[2] = (color.b * shade * 255.0) as u8;
+                }
+            }
+            let texture = Texture2D::from_image(&image);
+            texture.set_filter(FilterMode::Nearest);
+            texture
+        }
+        fn team_flags(bytes: &[&'static [u8]], color: Color) -> Vec<Texture2D> {
+            bytes.iter().map(|bytes| team_flag(bytes, color)).collect()
+        }
         macro_rules! terrain_asset {
             ($id:literal, $path:literal) => {
                 (
@@ -255,6 +537,12 @@ impl AndroidArt {
                 )
             };
         }
+        // PNG террейна не копируются в порт: include_bytes! встраивает файлы
+        // прямо из соседнего дерева оригинальной игры:
+        // `Wesnoth-upstream/data/core/images/terrain/`.
+        // Первый аргумент — ключ VisualTile.image, второй — путь внутри этой
+        // папки. Если новый ключ добавить только в terrain.rs, но забыть здесь,
+        // правило сработает, однако texture останется None и ничего не нарисуется.
         let terrain = [
             terrain_asset!("grass-green", "grass/green.png"),
             terrain_asset!("grass-semi-dry", "grass/semi-dry.png"),
@@ -264,13 +552,55 @@ impl AndroidArt {
             terrain_asset!("stone-path", "flat/stone-path.png"),
             terrain_asset!("beach", "sand/beach.png"),
             terrain_asset!("hills-regular", "hills/regular.png"),
-            terrain_asset!("mountains", "mountains/basic.png"),
+            terrain_asset!("hills-dry", "hills/dry.png"),
+            terrain_asset!("mountains-single-1", "mountains/basic.png"),
+            terrain_asset!("mountains-single-2", "mountains/basic2.png"),
+            terrain_asset!("mountains-single-3", "mountains/basic3.png"),
+            terrain_asset!("mountain-long-se-1", "mountains/basic_range3_1.png"),
+            terrain_asset!("mountain-long-se-2", "mountains/basic_range3_2.png"),
+            terrain_asset!("mountain-long-se-3", "mountains/basic_range3_3.png"),
+            terrain_asset!("mountain-long-se-4", "mountains/basic_range3_4.png"),
+            terrain_asset!("mountain-long-se-5", "mountains/basic_range3_5.png"),
+            terrain_asset!("mountain-long-ne-1", "mountains/basic_range4_1.png"),
+            terrain_asset!("mountain-long-ne-2", "mountains/basic_range4_2.png"),
+            terrain_asset!("mountain-long-ne-3", "mountains/basic_range4_3.png"),
+            terrain_asset!("mountain-long-ne-4", "mountains/basic_range4_4.png"),
+            terrain_asset!("mountain-long-ne-5", "mountains/basic_range4_5.png"),
+            terrain_asset!("mountain-range-se-1", "mountains/basic_range1_1.png"),
+            terrain_asset!("mountain-range-se-2", "mountains/basic_range1_2.png"),
+            terrain_asset!("mountain-range-se-3", "mountains/basic_range1_3.png"),
+            terrain_asset!("mountain-range-ne-1", "mountains/basic_range2_1.png"),
+            terrain_asset!("mountain-range-ne-2", "mountains/basic_range2_2.png"),
+            terrain_asset!("mountain-range-ne-3", "mountains/basic_range2_3.png"),
+            terrain_asset!("mountain-cluster-a-1", "mountains/basic5_1.png"),
+            terrain_asset!("mountain-cluster-a-2", "mountains/basic5_2.png"),
+            terrain_asset!("mountain-cluster-a-3", "mountains/basic5_3.png"),
+            terrain_asset!("mountain-cluster-b-1", "mountains/basic6_1.png"),
+            terrain_asset!("mountain-cluster-b-2", "mountains/basic6_2.png"),
+            terrain_asset!("mountain-cluster-b-3", "mountains/basic6_3.png"),
             terrain_asset!("mountain-wall", "mountains/basic-castle-n.png"),
             terrain_asset!("swamp", "swamp/water.png"),
+            terrain_asset!("swamp-mud", "swamp/mud.png"),
             terrain_asset!("ocean", "water/ocean-A01.png"),
             terrain_asset!("water", "water/coast-tile.png"),
+            terrain_asset!("reef-gray", "water/reef-gray-tile.png"),
             terrain_asset!("castle-ground", "castle/castle-tile.png"),
             terrain_asset!("keep-ground", "castle/keep-tile.png"),
+            terrain_asset!("sunken-cobbles", "castle/aquatic-castle/cobbles.png"),
+            terrain_asset!("keep-cobbles", "castle/cobbles-keep.png"),
+            terrain_asset!("aquatic-camp-floor", "castle/aquatic-camp/floor.png"),
+            terrain_asset!("dwarven-castle-floor", "castle/dwarven-castle-floor.png"),
+            terrain_asset!("dwarven-keep-floor", "castle/dwarven-keep-floor.png"),
+            terrain_asset!("elven-ruin-ground", "castle/elven-ruin/grounds.png"),
+            terrain_asset!("elven-ruin-keep", "castle/elven-ruin/keep.png"),
+            terrain_asset!("road-desert", "flat/desert-road.png"),
+            terrain_asset!("road-cobbles", "flat/road.png"),
+            terrain_asset!("interior-wood-ruined", "interior/wood-ruined.png"),
+            terrain_asset!("cave-floor", "cave/floor6.png"),
+            terrain_asset!("lava", "unwalkable/lava-A01.png"),
+            terrain_asset!("cave-wall", "cave/wall-rough-tile.png"),
+            terrain_asset!("ancient-wall", "walls/stone/ancient/wall-stone-tile.png"),
+            terrain_asset!("stone-wall", "walls/stone/wall-stone-tile.png"),
             terrain_asset!("encampment-tent", "castle/encampment/tent.png"),
             terrain_asset!("forest-mixed-1", "forest/mixed-summer.png"),
             terrain_asset!("forest-mixed-2", "forest/mixed-summer2.png"),
@@ -284,19 +614,28 @@ impl AndroidArt {
             terrain_asset!("forest-mixed-small", "forest/mixed-summer-small.png"),
             terrain_asset!("forest-summer-small", "forest/deciduous-summer-small.png"),
             terrain_asset!("forest-pine-small", "forest/pine-small.png"),
+            terrain_asset!("forest-winter", "forest/deciduous-winter.png"),
+            terrain_asset!("forest-winter-small", "forest/deciduous-winter-small.png"),
+            terrain_asset!("forest-mixed-winter", "forest/mixed-winter.png"),
+            terrain_asset!("forest-mixed-winter-small", "forest/mixed-winter-small.png"),
+            terrain_asset!("great-tree", "forest/great-tree.png"),
             terrain_asset!("village-human", "village/human.png"),
+            terrain_asset!("village-human-ruin", "village/human-cottage-ruin.png"),
             terrain_asset!("village-human-city-ruin", "village/human-city-ruin.png"),
             terrain_asset!("village-human-hills-ruin", "village/human-hills-ruin.png"),
             terrain_asset!("village-hills", "village/human-hills.png"),
+            terrain_asset!("village-swamp", "village/swampwater.png"),
+            terrain_asset!("village-elven", "village/elven.png"),
+            terrain_asset!("village-windmill", "misc/windmill-A01.png"),
             terrain_asset!("village-hut", "village/hut.png"),
             terrain_asset!("village-log-cabin", "village/log-cabin.png"),
             terrain_asset!("village-camp", "village/camp.png"),
             terrain_asset!("wood-bridge-n-s", "bridge/wood-n-s.png"),
             terrain_asset!("wood-bridge-ne-sw", "bridge/wood-ne-sw.png"),
             terrain_asset!("wood-bridge-se-nw", "bridge/wood-se-nw.png"),
-            terrain_asset!("stone-bridge-n-s", "bridge/stonebridge-s-n.png"),
-            terrain_asset!("stone-bridge-ne-sw", "bridge/stonebridge-sw-ne.png"),
-            terrain_asset!("stone-bridge-se-nw", "bridge/stonebridge-se-nw.png"),
+            terrain_asset!("stone-bridge-n-s", "bridge/stonebridge-n-s-tile.png"),
+            terrain_asset!("stone-bridge-ne-sw", "bridge/stonebridge-ne-sw-tile.png"),
+            terrain_asset!("stone-bridge-se-nw", "bridge/stonebridge-se-nw-tile.png"),
             terrain_asset!("wood-bridge-n-se-sw", "bridge/wood-n-se-sw.png"),
             terrain_asset!("wood-bridge-ne-s-nw", "bridge/wood-ne-s-nw.png"),
             terrain_asset!("wood-bridge-n-se", "bridge/wood-n-se.png"),
@@ -310,9 +649,26 @@ impl AndroidArt {
             terrain_asset!("mushrooms", "embellishments/mushroom.png"),
             terrain_asset!("stones", "embellishments/stones-small.png"),
             terrain_asset!("detritus", "misc/detritus/liter.png"),
+            terrain_asset!("detritus-trash", "misc/detritus/trashA-1.png"),
+            terrain_asset!("rubble", "misc/rubble.png"),
             terrain_asset!("water-flowers", "embellishments/water-lilies-flower.png"),
+            terrain_asset!("water-lilies", "embellishments/water-lilies.png"),
+            terrain_asset!("seashells", "embellishments/seashells.png"),
+            terrain_asset!("kelp", "water/seaweed/kelp-1.png"),
             terrain_asset!("farm", "embellishments/farm-veg-spring.png"),
             terrain_asset!("windmill", "misc/windmill-A01.png"),
+            terrain_asset!("campfire", "misc/fire-A01.png"),
+            terrain_asset!("brazier", "misc/brazier-embellishment.png"),
+            terrain_asset!("brazier-lit", "misc/brazier-A01.png"),
+            terrain_asset!("wall-fire", "walls/stone/flames/flames-tile.png"),
+        ]
+        .into_iter()
+        .map(|(id, bytes)| (id, texture(bytes)))
+        .collect();
+        let night_villages = [
+            terrain_asset!("village-human", "village/human-night.png"),
+            terrain_asset!("village-hut", "village/hut-night.png"),
+            terrain_asset!("village-log-cabin", "village/log-cabin-night.png"),
         ]
         .into_iter()
         .map(|(id, bytes)| (id, texture(bytes)))
@@ -374,6 +730,7 @@ impl AndroidArt {
             transition!("transition-dirt", "flat/dirt"),
             transition!("transition-stone-path", "flat/stone-path"),
             transition!("transition-hills", "hills/regular"),
+            transition!("shore", "hills/dry-to-water"),
             transition!("transition-swamp", "swamp/water"),
             transition!("transition-ocean", "water/ocean-A01"),
         ]
@@ -443,34 +800,41 @@ impl AndroidArt {
             .as_slice(),
         ]
         .map(texture);
-        let castle_convex = [
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-tl.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-tr.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-r.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-br.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-bl.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-l.png"
-            )
-            .as_slice(),
-        ]
-        .map(texture);
-        let castle_concave = [
+        let castle_hex_mask = Image::from_file_with_format(
+            include_bytes!("../../../Wesnoth-upstream/data/core/images/terrain/alphamask.png"),
+            Some(ImageFormat::Png),
+        )
+        .expect("bundled terrain mask must be a PNG");
+        let castle_convex = castle_textures(
+            [
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-tl.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-tr.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-r.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-br.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-bl.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-convex-l.png"
+                )
+                .as_slice(),
+            ],
+            &castle_hex_mask,
+        );
+        let castle_concave = castle_textures([
             include_bytes!(
                 "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-tl.png"
             )
@@ -495,77 +859,184 @@ impl AndroidArt {
                 "../../../Wesnoth-upstream/data/core/images/terrain/castle/castle-concave-l.png"
             )
             .as_slice(),
+        ], &castle_hex_mask);
+        let keep_convex = castle_textures(
+            [
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-tl.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-tr.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-r.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-br.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-bl.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-l.png"
+                )
+                .as_slice(),
+            ],
+            &castle_hex_mask,
+        );
+        let keep_concave = castle_textures(
+            [
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-tl.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-tr.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-r.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-br.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-bl.png"
+                )
+                .as_slice(),
+                include_bytes!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-l.png"
+                )
+                .as_slice(),
+            ],
+            &castle_hex_mask,
+        );
+        macro_rules! wall {
+            ($stem:literal) => {
+                castle_textures(
+                    ["tl", "tr", "r", "br", "bl", "l"].map(|corner| {
+                        let bytes = match corner {
+                            "tl" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $stem,
+                                "-tl.png"
+                            ))
+                            .as_slice(),
+                            "tr" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $stem,
+                                "-tr.png"
+                            ))
+                            .as_slice(),
+                            "r" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $stem,
+                                "-r.png"
+                            ))
+                            .as_slice(),
+                            "br" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $stem,
+                                "-br.png"
+                            ))
+                            .as_slice(),
+                            "bl" => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $stem,
+                                "-bl.png"
+                            ))
+                            .as_slice(),
+                            _ => include_bytes!(concat!(
+                                "../../../Wesnoth-upstream/data/core/images/terrain/",
+                                $stem,
+                                "-l.png"
+                            ))
+                            .as_slice(),
+                        };
+                        bytes
+                    }),
+                    &castle_hex_mask,
+                )
+            };
+        }
+        let castle_walls = [
+            ("castle-convex", castle_convex),
+            ("castle-concave", castle_concave),
+            ("keep-convex", keep_convex),
+            ("keep-concave", keep_concave),
+            ("ruinkeep1-convex", wall!("castle/ruinkeep1-convex")),
+            ("ruinkeep1-concave", wall!("castle/ruinkeep1-concave")),
+            (
+                "encampment-convex",
+                wall!("castle/encampment/regular-convex"),
+            ),
+            (
+                "encampment-concave",
+                wall!("castle/encampment/regular-concave"),
+            ),
+            ("ruin-convex", wall!("castle/ruin-convex")),
+            ("ruin-concave", wall!("castle/ruin-concave")),
+            ("sunken-ruin-convex", wall!("castle/sunken-ruin-convex")),
+            ("sunken-ruin-concave", wall!("castle/sunken-ruin-concave")),
         ]
-        .map(texture);
-        let keep_convex = [
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-tl.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-tr.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-r.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-br.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-bl.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-convex-l.png"
-            )
-            .as_slice(),
+        .into_iter()
+        .collect();
+        macro_rules! animation_frames {
+            ($stem:literal; $($frame:literal),+ $(,)?) => {
+                [$(include_bytes!(concat!(
+                    "../../../Wesnoth-upstream/data/core/images/terrain/",
+                    $stem,
+                    $frame,
+                    ".png"
+                )).as_slice()),+].map(texture)
+            };
+        }
+        let ocean_water = animation_frames!("water/ocean-A";
+            "01", "02", "03", "04", "05", "06", "07", "08", "09");
+        let windmill = animation_frames!("misc/windmill-A";
+            "01", "02", "03", "04", "05", "06", "07", "08", "09",
+            "10", "11", "12", "13", "14", "15", "16", "17", "18");
+        macro_rules! flag_frames {
+            ($stem:literal; $($frame:literal),+ $(,)?) => {
+                [$(include_bytes!(concat!(
+                    "../../../Wesnoth-upstream/data/core/images/flags/",
+                    $stem, "-flag-", $frame, ".png"
+                )).as_slice()),+]
+            };
+        }
+        let village_flags = [
+            (
+                "loyalist",
+                flag_frames!("loyalist"; "1", "2", "3", "4").as_slice(),
+            ),
+            (
+                "wood-elvish",
+                flag_frames!("wood-elvish"; "1", "2", "3", "4").as_slice(),
+            ),
+            (
+                "undead",
+                flag_frames!("undead"; "1", "2", "3", "4").as_slice(),
+            ),
+            (
+                "ragged",
+                flag_frames!("ragged"; "1", "2", "3", "4", "5", "6").as_slice(),
+            ),
         ]
-        .map(texture);
-        let keep_concave = [
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-tl.png"
+        .into_iter()
+        .map(|(family, frames)| {
+            (
+                family,
+                [team_flags(frames, SKYBLUE), team_flags(frames, ORANGE)],
             )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-tr.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-r.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-br.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-bl.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/castle/keep-concave-l.png"
-            )
-            .as_slice(),
-        ]
-        .map(texture);
-        let ocean_water = [
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/water/ocean-A01.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/water/ocean-A02.png"
-            )
-            .as_slice(),
-            include_bytes!(
-                "../../../Wesnoth-upstream/data/core/images/terrain/water/ocean-A03.png"
-            )
-            .as_slice(),
-        ]
-        .map(texture);
+        })
+        .collect();
         macro_rules! bridge_ends {
             ($stem:literal) => {
                 [
@@ -679,6 +1150,7 @@ impl AndroidArt {
             ),
         ]
         .into_iter()
+        .chain(core_unit_art::ALL.iter().copied())
         .map(|(id, bytes)| (id, texture(bytes)))
         .collect();
         let sidebar = texture(include_bytes!(
@@ -719,15 +1191,16 @@ impl AndroidArt {
         .map(|(id, bytes)| (id, texture(bytes)))
         .collect();
         Self {
+            menu_background,
             terrain,
+            night_villages,
             water_edges,
             transitions,
             green_transition_runs,
-            castle_convex,
-            castle_concave,
-            keep_convex,
-            keep_concave,
+            castle_walls,
             ocean_water,
+            windmill,
+            village_flags,
             wood_bridge_ends,
             wood_bridge_docks,
             stone_bridge_ends,
@@ -759,6 +1232,10 @@ async fn main() {
     #[cfg(target_os = "android")]
     let mut viewport_map_size = (0, 0);
     #[cfg(target_os = "android")]
+    let mut cached_terrain_map: Option<Map> = None;
+    #[cfg(target_os = "android")]
+    let mut cached_terrain = Vec::new();
+    #[cfg(target_os = "android")]
     exclude_android_system_gestures();
     #[cfg(target_os = "android")]
     let mut screen = AppScreen::MainMenu;
@@ -769,6 +1246,13 @@ async fn main() {
     };
     #[cfg(target_os = "android")]
     let mut menu_message = String::new();
+    #[cfg(target_os = "android")]
+    let mut scenario_selection = 0usize;
+    #[cfg(target_os = "android")]
+    // ponytail: меню не должно заранее разбирать тяжёлую кампанию, которую
+    // пользователь ещё не запускал; этот маленький сценарий здесь только заглушка.
+    let mut scenario_index = 0;
+    #[cfg(not(target_os = "android"))]
     let mut scenario_index = 2;
     let mut game = load_game(scenario_index);
     let mut selected: Option<String> = None;
@@ -780,9 +1264,15 @@ async fn main() {
     #[cfg(target_os = "android")]
     let mut move_preview: Option<MovePreview> = None;
     #[cfg(target_os = "android")]
+    let mut animations = AnimationPlayer::default();
+    #[cfg(target_os = "android")]
+    let mut tod_lighting = TodLighting::new();
+    #[cfg(target_os = "android")]
     let mut combat_dialog: Option<CombatDialog> = None;
     #[cfg(target_os = "android")]
     let mut recruit_menu: Option<RecruitMenu> = None;
+    #[cfg(target_os = "android")]
+    let mut advancement_selected = 0usize;
     #[cfg(target_os = "android")]
     let mut confirm_end_turn = false;
     #[cfg(target_os = "android")]
@@ -800,15 +1290,24 @@ async fn main() {
         &mut log,
         &mut dialog,
     );
+    let mut cached_snapshot: Option<(u64, ClientSnapshot)> = None;
 
     loop {
         #[cfg(target_os = "android")]
         if screen != AppScreen::Game {
-            if let Some(action) = draw_android_menu(&font, screen, &settings, &menu_message) {
+            if let Some(action) = draw_android_menu(
+                &font,
+                &art,
+                screen,
+                &settings,
+                &menu_message,
+                scenario_selection,
+            ) {
                 match action {
                     MenuAction::Continue => match load_android_save() {
                         Ok(loaded) => {
                             game = loaded;
+                            cached_snapshot = None;
                             selected = None;
                             target = None;
                             actions = AvailableActions::default();
@@ -823,12 +1322,15 @@ async fn main() {
                         Err(error) => menu_message = error,
                     },
                     MenuAction::NewGame => {
+                        scenario_selection = 0;
                         screen = AppScreen::Scenarios;
                     }
                     MenuAction::OpenSettings => screen = AppScreen::Settings,
-                    MenuAction::Scenario(index) => {
-                        scenario_index = index;
+                    MenuAction::SelectScenario(index) => scenario_selection = index,
+                    MenuAction::StartScenario => {
+                        scenario_index = CAMPAIGN_SCENARIOS[scenario_selection].source_index;
                         game = load_game(scenario_index);
+                        cached_snapshot = None;
                         reset_game_ui(
                             &mut selected,
                             &mut target,
@@ -875,6 +1377,7 @@ async fn main() {
         if let Some(index) = requested_scenario {
             scenario_index = index;
             game = load_game(scenario_index);
+            cached_snapshot = None;
             selected = None;
             target = None;
             weapon = 0;
@@ -893,13 +1396,46 @@ async fn main() {
             }
         }
 
-        let snapshot = read_snapshot(
-            game.snapshot().expect("game snapshot"),
-            game.query("status", Value::Nil).expect("game status"),
-        )
-        .expect("UI snapshot");
+        let revision = game.revision();
+        if cached_snapshot
+            .as_ref()
+            .is_none_or(|(cached, _)| *cached != revision)
+        {
+            cached_snapshot = Some((
+                revision,
+                read_snapshot(
+                    game.snapshot().expect("game snapshot"),
+                    game.query("status", Value::Nil).expect("game status"),
+                )
+                .expect("UI snapshot"),
+            ));
+        }
+        let snapshot = &cached_snapshot.as_ref().expect("cached UI snapshot").1;
+        #[cfg(target_os = "android")]
+        if let Some(pending) = &snapshot.pending_advancement {
+            advancement_selected =
+                advancement_selected.min(pending.details.len().saturating_sub(1));
+        } else {
+            advancement_selected = 0;
+        }
         #[cfg(target_os = "android")]
         {
+            animations.update();
+            tod_lighting.update(&snapshot.time_of_day);
+            if let Some(focus) = animations.focus() {
+                let point = viewport.world_to_screen(focus);
+                if point.x < 72.0
+                    || point.y < ANDROID_TOP_BAR_HEIGHT + 72.0
+                    || point.x > screen_width() - ANDROID_PANEL_WIDTH - 72.0
+                    || point.y > screen_height() - 72.0
+                {
+                    viewport.center_on(focus);
+                }
+            }
+            if cached_terrain_map.as_ref() != Some(&snapshot.map) {
+                cached_terrain = build_visuals(&snapshot.map);
+                cached_terrain_map = Some(snapshot.map.clone());
+            }
             let map_size = (snapshot.map.width, snapshot.map.height);
             if viewport_map_size != map_size {
                 if let Some(leader) = snapshot
@@ -963,13 +1499,21 @@ async fn main() {
         let touch_start =
             is_mouse_button_pressed(MouseButton::Left).then(|| Vec2::from(mouse_position()));
         #[cfg(target_os = "android")]
-        let gesture = if combat_dialog.is_none() && recruit_menu.is_none() && !confirm_end_turn {
+        let gesture = if combat_dialog.is_none()
+            && recruit_menu.is_none()
+            && snapshot.pending_advancement.is_none()
+            && !confirm_end_turn
+            && !animations.is_active()
+        {
             viewport.update()
         } else {
             ViewportGesture::default()
         };
         #[cfg(target_os = "android")]
-        let map_press = gesture.tap.map(|point| viewport.screen_to_world(point));
+        let map_press = gesture
+            .tap
+            .filter(|_| !animations.is_active())
+            .map(|point| viewport.screen_to_world(point));
         #[cfg(not(target_os = "android"))]
         let map_press =
             is_mouse_button_pressed(MouseButton::Left).then(|| Vec2::from(mouse_position()));
@@ -999,6 +1543,7 @@ async fn main() {
                     continue;
                 } else if mission_replay_rect().contains(point) {
                     game = load_game(scenario_index);
+                    cached_snapshot = None;
                     reset_game_ui(
                         &mut selected,
                         &mut target,
@@ -1021,6 +1566,7 @@ async fn main() {
                     {
                         Ok(next_game) => {
                             game = next_game;
+                            cached_snapshot = None;
                             scenario_index = SCENARIOS
                                 .iter()
                                 .position(|item| *item == path)
@@ -1055,8 +1601,6 @@ async fn main() {
                 confirm_end_turn = false;
             }
         }
-        #[cfg(not(target_os = "android"))]
-        let confirmed_end_turn = false;
         #[cfg(target_os = "android")]
         let cancel_selection = recruit_menu.is_none()
             && combat_dialog.is_none()
@@ -1075,8 +1619,15 @@ async fn main() {
             && combat_dialog.is_none()
             && !confirm_end_turn
             && ui_point.is_some_and(|point| end_turn_rect().contains(point));
-        #[cfg(not(target_os = "android"))]
-        let end_turn_button = false;
+        #[cfg(target_os = "android")]
+        let next_unit_button = recruit_menu.is_none()
+            && combat_dialog.is_none()
+            && !confirm_end_turn
+            && !animations.is_active()
+            && dialog.is_none()
+            && !mission_briefing
+            && mission_result.is_none()
+            && ui_point.is_some_and(|point| next_unit_rect().contains(point));
         #[cfg(target_os = "android")]
         if cancel_selection {
             selected = None;
@@ -1084,6 +1635,16 @@ async fn main() {
             actions = AvailableActions::default();
             move_preview = None;
             combat_dialog = None;
+        }
+        #[cfg(target_os = "android")]
+        if next_unit_button && let Some(unit) = next_movable_unit(&snapshot, selected.as_deref()) {
+            selected = Some(unit.id.clone());
+            target = None;
+            weapon = 0;
+            actions = read_actions(&game, &unit.id, false).unwrap_or_default();
+            inspected_hex = Some(unit.position);
+            move_preview = None;
+            viewport.center_on(hex_center(unit.position.x, unit.position.y));
         }
 
         #[cfg(target_os = "android")]
@@ -1111,9 +1672,11 @@ async fn main() {
                         attack_command(&combat.attacker, &combat.defender, weapon_id),
                     ) {
                         Ok(events) => {
-                            receive_events(events, &mut log, &mut dialog);
-                            actions =
+                            let next_actions =
                                 read_actions(&game, &combat.attacker, false).unwrap_or_default();
+                            animations.enqueue(&events, &snapshot);
+                            receive_events(events, &mut log, &mut dialog);
+                            actions = next_actions;
                         }
                         Err(error) => log.push(format!("Error: {error}")),
                     }
@@ -1132,11 +1695,39 @@ async fn main() {
         #[cfg(target_os = "android")]
         let combat_modal = combat_dialog.is_some()
             || confirm_end_turn
+            || snapshot.pending_advancement.is_some()
             || mission_briefing
             || mission_result.is_some()
             || mission_overlay_consumed;
         #[cfg(not(target_os = "android"))]
         let combat_modal = false;
+
+        #[cfg(target_os = "android")]
+        if let Some(pending) = &snapshot.pending_advancement
+            && dialog.is_none()
+            && !animations.is_active()
+            && let Some(point) = ui_point
+        {
+            for index in 0..pending.details.len().min(4) {
+                if recruit_type_rect(index).contains(point) {
+                    advancement_selected = index;
+                }
+            }
+            if recruit_confirm_rect().contains(point)
+                && let Some(choice) = pending.options.get(advancement_selected)
+            {
+                match game.execute(
+                    "advance",
+                    Value::Map(std::collections::BTreeMap::from([
+                        ("unit".into(), Value::String(pending.unit.clone())),
+                        ("choice".into(), Value::String(choice.clone())),
+                    ])),
+                ) {
+                    Ok(events) => receive_events(events, &mut log, &mut dialog),
+                    Err(error) => log.push(format!("Error: {error}")),
+                }
+            }
+        }
 
         #[cfg(target_os = "android")]
         if let Some(menu) = recruit_menu.as_mut() {
@@ -1183,23 +1774,6 @@ async fn main() {
                     }
                 }
             }
-        }
-
-        #[cfg(target_os = "android")]
-        if recruit_menu.is_none()
-            && !combat_modal
-            && dialog.is_none()
-            && let Some(point) = touch_start
-                .filter(|point| !touch_blocked(*point))
-                .map(|point| viewport.screen_to_world(point))
-            && let Some(object) = object_at(&snapshot, point)
-            && let Ok(available) = read_actions(&game, &object.id, false)
-        {
-            selected = Some(object.id.clone());
-            target = None;
-            weapon = 0;
-            actions = available;
-            move_preview = None;
         }
 
         #[cfg(target_os = "android")]
@@ -1283,67 +1857,84 @@ async fn main() {
                     .iter()
                     .any(|unit| unit.id == id && unit.side == snapshot.active_side);
                 if controllable
-                    && let Some(cell) = actions
+                    && let Some(_cell) = actions
                         .reachable
                         .iter()
                         .find(|cell| cell.position == destination)
                 {
                     #[cfg(target_os = "android")]
-                    if move_preview
+                    let preview_only = move_preview
                         .as_ref()
-                        .is_none_or(|preview| preview.destination != destination)
-                    {
-                        let unit = snapshot.objects.iter().find(|unit| unit.id == id);
-                        let terrain = snapshot.map.get(destination).unwrap_or("grassland");
-                        move_preview = Some(MovePreview {
-                            destination,
-                            path: cell.path.clone(),
-                            cost: cell.cost,
-                            defense: unit
-                                .and_then(|unit| unit.defense.get(terrain))
-                                .copied()
-                                .unwrap_or(100),
-                            stopped_by_zoc: cell.stopped_by_zoc,
-                        });
-                        next_frame().await;
-                        continue;
-                    }
-                    let object = id.to_owned();
-                    match game.execute("move", object_command(&object, Some(destination))) {
-                        Ok(events) => {
-                            receive_events(events, &mut log, &mut dialog);
-                            actions = read_actions(&game, &object, false).unwrap_or_default();
+                        .is_none_or(|preview| preview.destination != destination);
+                    #[cfg(not(target_os = "android"))]
+                    let preview_only = false;
+                    if preview_only {
+                        #[cfg(target_os = "android")]
+                        {
+                            let unit = snapshot.objects.iter().find(|unit| unit.id == id);
+                            let terrain = snapshot.map.get(destination).unwrap_or("grassland");
+                            move_preview = Some(MovePreview {
+                                destination,
+                                path: _cell.path.clone(),
+                                cost: _cell.cost,
+                                defense: unit
+                                    .and_then(|unit| unit.defense.get(terrain))
+                                    .copied()
+                                    .unwrap_or(100),
+                                stopped_by_zoc: _cell.stopped_by_zoc,
+                            });
                         }
-                        Err(error) => log.push(format!("Error: {error}")),
-                    }
-                    target = None;
-                    #[cfg(target_os = "android")]
-                    {
-                        move_preview = None;
+                    } else {
+                        let object = id.to_owned();
+                        match game.execute(
+                            "move_with_actions",
+                            object_command(&object, Some(destination)),
+                        ) {
+                            Ok(events) => {
+                                let next_actions = events
+                                    .iter()
+                                    .find(|event| {
+                                        event.get("type").and_then(Value::as_str)
+                                            == Some("available_actions")
+                                    })
+                                    .and_then(|event| parse_actions(event).ok())
+                                    .unwrap_or_default();
+                                #[cfg(target_os = "android")]
+                                animations.enqueue(&events, &snapshot);
+                                receive_events(events, &mut log, &mut dialog);
+                                actions = next_actions;
+                            }
+                            Err(error) => log.push(format!("Error: {error}")),
+                        }
+                        target = None;
+                        #[cfg(target_os = "android")]
+                        {
+                            move_preview = None;
+                        }
                     }
                 }
             }
         }
 
-        if dialog.is_none() {
-            if let Some(pending) = &snapshot.pending_advancement {
-                for (index, key) in [KeyCode::Z, KeyCode::X, KeyCode::C, KeyCode::V]
-                    .into_iter()
-                    .enumerate()
+        if dialog.is_none()
+            && let Some(pending) = &snapshot.pending_advancement
+        {
+            for (index, key) in [KeyCode::Z, KeyCode::X, KeyCode::C, KeyCode::V]
+                .into_iter()
+                .enumerate()
+            {
+                if is_key_pressed(key)
+                    && let Some(choice) = pending.options.get(index)
                 {
-                    if is_key_pressed(key) {
-                        if let Some(choice) = pending.options.get(index) {
-                            match game.execute(
-                                "advance",
-                                Value::Map(std::collections::BTreeMap::from([
-                                    ("unit".into(), Value::String(pending.unit.clone())),
-                                    ("choice".into(), Value::String(choice.clone())),
-                                ])),
-                            ) {
-                                Ok(events) => receive_events(events, &mut log, &mut dialog),
-                                Err(error) => log.push(format!("Error: {error}")),
-                            }
-                        }
+                    match game.execute(
+                        "advance",
+                        Value::Map(std::collections::BTreeMap::from([
+                            ("unit".into(), Value::String(pending.unit.clone())),
+                            ("choice".into(), Value::String(choice.clone())),
+                        ])),
+                    ) {
+                        Ok(events) => receive_events(events, &mut log, &mut dialog),
+                        Err(error) => log.push(format!("Error: {error}")),
                     }
                 }
             }
@@ -1351,62 +1942,61 @@ async fn main() {
 
         if dialog.is_none() && !snapshot.finished && snapshot.pending_advancement.is_none() {
             for (index, key) in [KeyCode::Q, KeyCode::W].into_iter().enumerate() {
-                if is_key_pressed(key) {
-                    if let Some(unit_type) = snapshot.recruit_types.get(index) {
-                        match game.execute(
-                            "recruit",
-                            Value::Map(std::collections::BTreeMap::from([(
-                                "unit_type".into(),
-                                Value::String(unit_type.clone()),
-                            )])),
-                        ) {
-                            Ok(events) => receive_events(events, &mut log, &mut dialog),
-                            Err(error) => log.push(format!("Error: {error}")),
-                        }
+                if is_key_pressed(key)
+                    && let Some(unit_type) = snapshot.recruit_types.get(index)
+                {
+                    match game.execute(
+                        "recruit",
+                        Value::Map(std::collections::BTreeMap::from([(
+                            "unit_type".into(),
+                            Value::String(unit_type.clone()),
+                        )])),
+                    ) {
+                        Ok(events) => receive_events(events, &mut log, &mut dialog),
+                        Err(error) => log.push(format!("Error: {error}")),
                     }
                 }
             }
-            if is_key_pressed(KeyCode::U) {
-                if let Some(unit) = snapshot.recall_units.first() {
-                    let destination = (1..=snapshot.map.height as i64)
-                        .flat_map(|y| {
-                            (1..=snapshot.map.width as i64).map(move |x| Position { x, y })
-                        })
-                        .find(|position| {
-                            snapshot.map.get(*position) == Ok("castle")
-                                && snapshot
-                                    .objects
-                                    .iter()
-                                    .all(|object| object.position != *position)
-                        });
-                    if let Some(destination) = destination {
-                        let command = Value::Map(std::collections::BTreeMap::from([
-                            ("unit".into(), Value::String(unit.clone())),
-                            (
-                                "destination".into(),
-                                Value::Map(std::collections::BTreeMap::from([
-                                    ("x".into(), Value::Integer(destination.x)),
-                                    ("y".into(), Value::Integer(destination.y)),
-                                ])),
-                            ),
-                        ]));
-                        match game.execute("recall", command) {
-                            Ok(events) => receive_events(events, &mut log, &mut dialog),
-                            Err(error) => log.push(format!("Error: {error}")),
-                        }
+            if is_key_pressed(KeyCode::U)
+                && let Some(unit) = snapshot.recall_units.first()
+            {
+                let destination = (1..=snapshot.map.height as i64)
+                    .flat_map(|y| (1..=snapshot.map.width as i64).map(move |x| Position { x, y }))
+                    .find(|position| {
+                        snapshot.map.get(*position) == Ok("castle")
+                            && snapshot
+                                .objects
+                                .iter()
+                                .all(|object| object.position != *position)
+                    });
+                if let Some(destination) = destination {
+                    let command = Value::Map(std::collections::BTreeMap::from([
+                        ("unit".into(), Value::String(unit.clone())),
+                        (
+                            "destination".into(),
+                            Value::Map(std::collections::BTreeMap::from([
+                                ("x".into(), Value::Integer(destination.x)),
+                                ("y".into(), Value::Integer(destination.y)),
+                            ])),
+                        ),
+                    ]));
+                    match game.execute("recall", command) {
+                        Ok(events) => receive_events(events, &mut log, &mut dialog),
+                        Err(error) => log.push(format!("Error: {error}")),
                     }
                 }
             }
-            let end_turn_requested = is_key_pressed(KeyCode::E)
-                || cfg!(target_os = "android") && (end_turn_button || confirmed_end_turn);
+            #[cfg(target_os = "android")]
+            let end_turn_requested = !animations.is_active()
+                && (is_key_pressed(KeyCode::E) || end_turn_button || confirmed_end_turn);
+            #[cfg(not(target_os = "android"))]
+            let end_turn_requested = is_key_pressed(KeyCode::E);
             #[cfg(target_os = "android")]
             let end_turn_now = if end_turn_requested
                 && !confirmed_end_turn
-                && snapshot
-                    .objects
-                    .iter()
-                    .any(|unit| unit.side == snapshot.active_side && unit.movement_points > 0)
-            {
+                && snapshot.objects.iter().any(|unit| {
+                    unit.side == snapshot.active_side && !unit.is_leader && unit.movement_points > 0
+                }) {
                 confirm_end_turn = true;
                 false
             } else {
@@ -1417,6 +2007,8 @@ async fn main() {
             if snapshot.can_end_turn && end_turn_now {
                 match game.execute("end_turn", Value::Nil) {
                     Ok(events) => {
+                        #[cfg(target_os = "android")]
+                        animations.enqueue(&events, &snapshot);
                         receive_events(events, &mut log, &mut dialog);
                         selected = None;
                         target = None;
@@ -1444,30 +2036,36 @@ async fn main() {
                 }
             }
 
-            if is_key_pressed(KeyCode::Enter) {
-                if let (Some(attacker), Some(defender)) = (selected.as_ref(), target.as_ref()) {
-                    if let Some(weapon_id) = actions.attacks.get(weapon) {
-                        match game.execute(
-                            "resolve",
-                            Value::Map(std::collections::BTreeMap::from([
-                                ("attacker".into(), Value::String(attacker.clone())),
-                                ("defender".into(), Value::String(defender.clone())),
-                                ("weapon".into(), Value::String(weapon_id.clone())),
-                            ])),
-                        ) {
-                            Ok(events) => {
-                                receive_events(events, &mut log, &mut dialog);
-                                actions = read_actions(&game, attacker, false).unwrap_or_default();
-                            }
-                            Err(error) => log.push(format!("Error: {error}")),
-                        }
+            if is_key_pressed(KeyCode::Enter)
+                && let (Some(attacker), Some(defender)) = (selected.as_ref(), target.as_ref())
+                && let Some(weapon_id) = actions.attacks.get(weapon)
+            {
+                match game.execute(
+                    "resolve",
+                    Value::Map(std::collections::BTreeMap::from([
+                        ("attacker".into(), Value::String(attacker.clone())),
+                        ("defender".into(), Value::String(defender.clone())),
+                        ("weapon".into(), Value::String(weapon_id.clone())),
+                    ])),
+                ) {
+                    Ok(events) => {
+                        let next_actions = read_actions(&game, attacker, false).unwrap_or_default();
+                        #[cfg(target_os = "android")]
+                        animations.enqueue(&events, &snapshot);
+                        receive_events(events, &mut log, &mut dialog);
+                        actions = next_actions;
                     }
+                    Err(error) => log.push(format!("Error: {error}")),
                 }
             }
         }
 
         #[cfg(target_os = "android")]
-        if snapshot.finished && dialog.is_none() && mission_result.is_none() {
+        if snapshot.finished
+            && snapshot.pending_advancement.is_none()
+            && dialog.is_none()
+            && mission_result.is_none()
+        {
             let victory = snapshot.result.as_deref() == Some("victory");
             mission_result = Some(MissionResult {
                 victory,
@@ -1496,6 +2094,9 @@ async fn main() {
             &art,
             &viewport,
             &snapshot,
+            &cached_terrain,
+            &animations,
+            &tod_lighting,
             selected.as_deref(),
             target.as_deref(),
             &actions.reachable,
@@ -1555,6 +2156,10 @@ async fn main() {
             );
         }
         #[cfg(target_os = "android")]
+        if let Some(pending) = &snapshot.pending_advancement {
+            draw_advancement_menu(&font, &art, pending, advancement_selected);
+        }
+        #[cfg(target_os = "android")]
         if settings.show_fps {
             text(
                 &font,
@@ -1597,16 +2202,16 @@ fn mission_start_rect() -> Rect {
     let window = mission_window_rect();
     Rect::new(
         window.x + window.w - 244.0,
-        window.y + window.h - 70.0,
+        window.y + window.h - 82.0,
         210.0,
-        48.0,
+        64.0,
     )
 }
 
 #[cfg(target_os = "android")]
 fn mission_menu_rect() -> Rect {
     let window = mission_window_rect();
-    Rect::new(window.x + 28.0, window.y + window.h - 70.0, 220.0, 48.0)
+    Rect::new(window.x + 28.0, window.y + window.h - 82.0, 220.0, 64.0)
 }
 
 #[cfg(target_os = "android")]
@@ -1614,9 +2219,9 @@ fn mission_replay_rect() -> Rect {
     let window = mission_window_rect();
     Rect::new(
         window.x + window.w / 2.0 - 110.0,
-        window.y + window.h - 70.0,
+        window.y + window.h - 82.0,
         220.0,
-        48.0,
+        64.0,
     )
 }
 
@@ -1625,9 +2230,9 @@ fn mission_next_rect() -> Rect {
     let window = mission_window_rect();
     Rect::new(
         window.x + window.w - 248.0,
-        window.y + window.h - 70.0,
+        window.y + window.h - 82.0,
         220.0,
-        48.0,
+        64.0,
     )
 }
 
@@ -1802,6 +2407,7 @@ fn load_game(index: usize) -> Game {
     Game::load(scripts, SCENARIOS[index]).expect("load scenario")
 }
 
+#[cfg(target_os = "android")]
 fn load_game_with_campaign(
     scenario: &str,
     campaign: &wesnoth_engine::game::CampaignState,
@@ -1846,7 +2452,8 @@ enum MenuAction {
     Continue,
     NewGame,
     OpenSettings,
-    Scenario(usize),
+    SelectScenario(usize),
+    StartScenario,
     ToggleGrid,
     ToggleFps,
     Back,
@@ -1855,9 +2462,11 @@ enum MenuAction {
 #[cfg(target_os = "android")]
 fn draw_android_menu(
     font: &Font,
+    art: &AndroidArt,
     screen: AppScreen,
     settings: &ClientSettings,
     message: &str,
+    scenario_selection: usize,
 ) -> Option<MenuAction> {
     clear_background(Color::from_rgba(22, 28, 35, 255));
     let width = screen_width().min(720.0);
@@ -1865,8 +2474,7 @@ fn draw_android_menu(
     let pressed = is_mouse_button_pressed(MouseButton::Left);
     let point = Vec2::from(mouse_position());
     let mut result = None;
-    let mut menu_button = |y: f32, label: &str, enabled: bool, action: MenuAction| {
-        let rect = Rect::new(left + 35.0, y, width - 70.0, 70.0);
+    let mut menu_button = |rect: Rect, label: &str, enabled: bool, action: MenuAction| {
         let hovered = enabled && rect.contains(point);
         draw_rectangle(
             rect.x,
@@ -1882,12 +2490,26 @@ fn draw_android_menu(
             },
         );
         draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, GRAY);
-        let size = 29.0;
-        centered_text(font, label, rect, size, if enabled { WHITE } else { GRAY });
+        let color = if enabled { WHITE } else { GRAY };
+        if matches!(action, MenuAction::SelectScenario(_)) {
+            let size = 20.0;
+            let dimensions = measure_ui_text(label, Some(font), size);
+            text(
+                font,
+                label,
+                rect.x + 18.0,
+                rect.y + (rect.h + dimensions.height) / 2.0,
+                size,
+                color,
+            );
+        } else {
+            centered_text(font, label, rect, 29.0, color);
+        }
         if pressed && hovered {
             result = Some(action);
         }
     };
+    let full_button = |y| Rect::new(left + 35.0, y, width - 70.0, 80.0);
 
     text(
         font,
@@ -1899,34 +2521,135 @@ fn draw_android_menu(
     );
     match screen {
         AppScreen::MainMenu => {
+            draw_main_menu_backdrop(art);
+            let panel_width = (screen_width() * 0.34).clamp(360.0, 470.0);
+            let panel = Rect::new(
+                screen_width() - panel_width - 54.0,
+                62.0,
+                panel_width,
+                screen_height() - 124.0,
+            );
+            draw_rectangle(
+                panel.x,
+                panel.y,
+                panel.w,
+                panel.h,
+                Color::from_rgba(18, 24, 29, 225),
+            );
+            draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, 3.0, GOLD);
+            text(font, "WESNOTH", 64.0, 112.0, 62.0, GOLD);
+            text(
+                font,
+                "Битва за королевство",
+                68.0,
+                150.0,
+                23.0,
+                Color::from_rgba(230, 221, 190, 255),
+            );
+            text(
+                font,
+                "Главное меню",
+                panel.x + 30.0,
+                panel.y + 55.0,
+                27.0,
+                GOLD,
+            );
+            let button = |y| Rect::new(panel.x + 28.0, y, panel.w - 56.0, 80.0);
             menu_button(
-                115.0,
+                button(panel.y + 92.0),
                 "Продолжить",
                 android_save_path().is_ok_and(|path| path.exists()),
                 MenuAction::Continue,
             );
-            menu_button(193.0, "Новая игра", true, MenuAction::NewGame);
-            menu_button(271.0, "Настройки", true, MenuAction::OpenSettings);
+            menu_button(
+                button(panel.y + 182.0),
+                "Новая игра",
+                true,
+                MenuAction::NewGame,
+            );
+            menu_button(
+                button(panel.y + 272.0),
+                "Настройки",
+                true,
+                MenuAction::OpenSettings,
+            );
             if !message.is_empty() {
-                text(font, message, left + 45.0, 410.0, 21.0, LIGHTGRAY);
+                text(
+                    font,
+                    message,
+                    panel.x + 30.0,
+                    panel.y + panel.h - 34.0,
+                    19.0,
+                    LIGHTGRAY,
+                );
             }
         }
         AppScreen::Scenarios => {
-            text(font, "Сценарии", left + 45.0, 108.0, 30.0, WHITE);
-            for (index, name) in SCENARIO_NAMES.iter().enumerate() {
+            let margin = 38.0;
+            let list_width = (screen_width() * 0.32).clamp(480.0, 620.0);
+            text(font, "Кампания", margin, 84.0, 36.0, WHITE);
+            for (index, scenario) in CAMPAIGN_SCENARIOS.iter().enumerate() {
+                let rect = Rect::new(margin, 112.0 + index as f32 * 86.0, list_width, 76.0);
                 menu_button(
-                    125.0 + index as f32 * 72.0,
-                    name,
+                    rect,
+                    &format!("{}.  {}", index + 1, scenario.title),
                     true,
-                    MenuAction::Scenario(index),
+                    MenuAction::SelectScenario(index),
                 );
+                if index == scenario_selection {
+                    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 3.0, GOLD);
+                }
             }
-            menu_button(screen_height() - 82.0, "Назад", true, MenuAction::Back);
+            let card = &CAMPAIGN_SCENARIOS[scenario_selection];
+            let info_x = margin + list_width + 34.0;
+            let info_width = screen_width() - info_x - margin;
+            let info = Rect::new(info_x, 112.0, info_width, screen_height() - 224.0);
+            draw_rectangle(
+                info.x,
+                info.y,
+                info.w,
+                info.h,
+                Color::from_rgba(31, 42, 53, 255),
+            );
+            draw_rectangle_lines(info.x, info.y, info.w, info.h, 2.0, GRAY);
+            text(
+                font,
+                &format!("Глава {}", scenario_selection + 1),
+                info.x + 28.0,
+                info.y + 46.0,
+                22.0,
+                GOLD,
+            );
+            text(font, card.title, info.x + 28.0, info.y + 92.0, 34.0, WHITE);
+            let mut text_y = info.y + 140.0;
+            for line in wrapped_lines(font, card.description, info.w - 56.0, 22.0) {
+                text(font, &line, info.x + 28.0, text_y, 22.0, LIGHTGRAY);
+                text_y += 29.0;
+            }
+            text_y += 22.0;
+            text(font, "Задача", info.x + 28.0, text_y, 23.0, GOLD);
+            text_y += 37.0;
+            for line in wrapped_lines(font, card.objective, info.w - 56.0, 22.0) {
+                text(font, &line, info.x + 28.0, text_y, 22.0, WHITE);
+                text_y += 29.0;
+            }
+            menu_button(
+                Rect::new(margin, screen_height() - 94.0, list_width, 72.0),
+                "Назад",
+                true,
+                MenuAction::Back,
+            );
+            menu_button(
+                Rect::new(info.x, screen_height() - 94.0, info.w, 72.0),
+                "Начать сценарий",
+                true,
+                MenuAction::StartScenario,
+            );
         }
         AppScreen::Settings => {
             text(font, "Настройки", left + 45.0, 108.0, 30.0, WHITE);
             menu_button(
-                145.0,
+                full_button(145.0),
                 if settings.show_grid {
                     "Сетка: включена"
                 } else {
@@ -1936,7 +2659,7 @@ fn draw_android_menu(
                 MenuAction::ToggleGrid,
             );
             menu_button(
-                213.0,
+                full_button(235.0),
                 if settings.show_fps {
                     "Счётчик FPS: включён"
                 } else {
@@ -1945,11 +2668,53 @@ fn draw_android_menu(
                 true,
                 MenuAction::ToggleFps,
             );
-            menu_button(315.0, "Назад", true, MenuAction::Back);
+            menu_button(full_button(335.0), "Назад", true, MenuAction::Back);
         }
         AppScreen::Game => {}
     }
     result
+}
+
+#[cfg(target_os = "android")]
+fn draw_main_menu_backdrop(art: &AndroidArt) {
+    let texture = &art.menu_background;
+    let target_aspect = screen_width() / screen_height();
+    let source_aspect = texture.width() / texture.height();
+    let source = if target_aspect > source_aspect {
+        let height = texture.width() / target_aspect;
+        Rect::new(
+            0.0,
+            (texture.height() - height) / 2.0,
+            texture.width(),
+            height,
+        )
+    } else {
+        let width = texture.height() * target_aspect;
+        Rect::new(
+            (texture.width() - width) / 2.0,
+            0.0,
+            width,
+            texture.height(),
+        )
+    };
+    draw_texture_ex(
+        texture,
+        0.0,
+        0.0,
+        WHITE,
+        DrawTextureParams {
+            dest_size: Some(vec2(screen_width(), screen_height())),
+            source: Some(source),
+            ..Default::default()
+        },
+    );
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::from_rgba(9, 13, 17, 58),
+    );
 }
 
 #[cfg(target_os = "android")]
@@ -2073,6 +2838,7 @@ fn measure_ui_text(value: &str, font: Option<&Font>, size: f32) -> TextDimension
     measure_text(value, font, display_font_size(size) as u16, 1.0)
 }
 
+#[cfg(target_os = "android")]
 fn centered_text(font: &Font, value: &str, rect: Rect, size: f32, color: Color) {
     let dimensions = measure_ui_text(value, Some(font), size);
     text(
@@ -2090,7 +2856,7 @@ fn hex_center(x: i64, y: i64) -> Vec2 {
     let row = y as f32 - 1.0;
     vec2(
         MAP_ORIGIN.x + column * 54.0,
-        MAP_ORIGIN.y + row * 72.0 + (x % 2 == 0) as u8 as f32 * 36.0,
+        MAP_ORIGIN.y + row * 72.0 - (x % 2 == 0) as u8 as f32 * 36.0,
     )
 }
 
@@ -2143,11 +2909,6 @@ impl AndroidViewport {
 
     fn screen_to_world(&self, point: Vec2) -> Vec2 {
         viewport_screen_to_world(point, self.offset, self.scale)
-    }
-
-    fn cancel_gesture(&mut self) {
-        self.drag = None;
-        self.pinch = None;
     }
 
     fn center_on(&mut self, point: Vec2) {
@@ -2246,7 +3007,7 @@ impl AndroidTouch {
 
 #[cfg(target_os = "android")]
 fn menu_hotspot() -> Rect {
-    Rect::new(8.0, 8.0, 76.0, 68.0)
+    Rect::new(8.0, 6.0, 84.0, 76.0)
 }
 
 #[cfg(target_os = "android")]
@@ -2259,22 +3020,29 @@ fn touch_menu() -> bool {
 fn end_turn_rect() -> Rect {
     Rect::new(
         screen_width() - ANDROID_PANEL_WIDTH + 12.0,
-        screen_height() - 84.0,
+        screen_height() - 96.0,
         ANDROID_PANEL_WIDTH - 24.0,
-        68.0,
+        80.0,
     )
 }
 
 #[cfg(target_os = "android")]
 fn cancel_selection_rect() -> Rect {
     let end = end_turn_rect();
-    Rect::new(end.x, end.y - 78.0, end.w, 66.0)
+    Rect::new(end.x, end.y - 86.0, (end.w - 8.0) / 2.0, 76.0)
+}
+
+#[cfg(target_os = "android")]
+fn next_unit_rect() -> Rect {
+    let cancel = cancel_selection_rect();
+    Rect::new(cancel.x + cancel.w + 8.0, cancel.y, cancel.w, cancel.h)
 }
 
 #[cfg(target_os = "android")]
 fn recruit_button_rect() -> Rect {
     let cancel = cancel_selection_rect();
-    Rect::new(cancel.x, cancel.y - 78.0, cancel.w, 66.0)
+    let end = end_turn_rect();
+    Rect::new(end.x, cancel.y - 86.0, end.w, 76.0)
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -2287,6 +3055,7 @@ fn touch_blocked(point: Vec2) -> bool {
     menu_hotspot().contains(point)
         || end_turn_rect().contains(point)
         || cancel_selection_rect().contains(point)
+        || next_unit_rect().contains(point)
         || recruit_button_rect().contains(point)
         || point.y <= ANDROID_TOP_BAR_HEIGHT
         || point.x >= screen_width() - ANDROID_PANEL_WIDTH
@@ -2298,6 +3067,9 @@ fn draw_map_android(
     art: &AndroidArt,
     viewport: &AndroidViewport,
     snapshot: &ClientSnapshot,
+    terrain: &[wesnoth_engine::terrain::VisualTile],
+    animations: &AnimationPlayer,
+    tod_lighting: &TodLighting,
     selected: Option<&str>,
     target: Option<&str>,
     reachable: &[ReachableCell],
@@ -2305,19 +3077,35 @@ fn draw_map_android(
     move_preview: Option<&MovePreview>,
     inspected_hex: Option<Position>,
 ) {
-    // Wesnoth terrain is composited globally by layer; large overlays may span hexes.
+    let world_tint = tod_lighting.tint();
+    // Порядок кадра:
+    // 1. тёмная подложка всех гексов (чтобы за прозрачными PNG не было дыр);
+    // 2. весь террейн глобально по layer;
+    // 3. отладка и сетка;
+    // 4. владельцы деревень, маршруты, выделения и юниты.
+    // Террейн нельзя рисовать «полностью один гекс, затем следующий»: стены,
+    // горы и каменные мосты используют PNG крупнее 72x72 и заходят на соседей.
     for y in 1..=snapshot.map.height as i64 {
         for x in 1..=snapshot.map.width as i64 {
-            let destination = Position { x, y };
             let center = viewport.world_to_screen(hex_center(x, y));
             let radius = HEX_RADIUS * viewport.scale;
-            draw_wesnoth_hex(center, radius, Color::from_rgba(45, 65, 40, 255));
+            if !screen_rect_visible(center, vec2(radius * 2.0, radius * 2.0)) {
+                continue;
+            }
+            draw_wesnoth_hex(
+                center,
+                radius,
+                multiply_tint(Color::from_rgba(45, 65, 40, 255), world_tint),
+            );
         }
     }
-    let water_frame = (get_time() * 5.0) as usize;
-    for tile in build_visuals(&snapshot.map) {
+    let animation_time = get_time();
+    let water_frame = (animation_time * 5.0) as usize;
+    let windmill_frame = (animation_time * 10.0) as usize;
+    for tile in terrain {
         let center = viewport.world_to_screen(hex_center(tile.position.x, tile.position.y));
-        let tint = terrain_tint(snapshot, tile.position, reachable, selected.is_some());
+        // Простые изображения ищутся по ключу в art.terrain. Направленные
+        // семейства выбирают отдельный массив и индекс направления из kind.
         let texture = match tile.kind {
             VisualKind::Edge(direction) => Some(&art.water_edges[direction]),
             VisualKind::Transition(direction) => art
@@ -2330,16 +3118,13 @@ fn draw_map_android(
                     .get(tile.image)
                     .map(|textures| &textures[direction])
             }),
-            VisualKind::CastleConvex(corner) => {
-                Some(&art.castle_convex[castle_texture_index(corner)])
-            }
-            VisualKind::CastleConcave(corner) => {
-                Some(&art.castle_concave[castle_texture_index(corner)])
-            }
-            VisualKind::KeepConvex(corner) => Some(&art.keep_convex[castle_texture_index(corner)]),
-            VisualKind::KeepConcave(corner) => {
-                Some(&art.keep_concave[castle_texture_index(corner)])
-            }
+            VisualKind::CastleConvex(corner)
+            | VisualKind::CastleConcave(corner)
+            | VisualKind::KeepConvex(corner)
+            | VisualKind::KeepConcave(corner) => art
+                .castle_walls
+                .get(tile.image)
+                .map(|textures| &textures[castle_texture_index(corner)]),
             VisualKind::BridgeEnd(direction) if tile.image == "stone-bridge-end" => {
                 Some(&art.stone_bridge_ends[direction])
             }
@@ -2349,6 +3134,15 @@ fn draw_map_android(
             VisualKind::BridgeEnd(direction) => Some(&art.wood_bridge_ends[direction]),
             VisualKind::Base if tile.image == "ocean" => {
                 Some(&art.ocean_water[water_frame % art.ocean_water.len()])
+            }
+            VisualKind::Overlay if tile.image == "windmill" => {
+                Some(&art.windmill[windmill_frame % art.windmill.len()])
+            }
+            VisualKind::Overlay
+                if is_night(&snapshot.time_of_day)
+                    && art.night_villages.contains_key(tile.image) =>
+            {
+                art.night_villages.get(tile.image)
             }
             _ => art.terrain.get(tile.image),
         };
@@ -2360,6 +3154,26 @@ fn draw_map_android(
                 tile.image,
                 vec2(texture.width(), texture.height()),
             ) * scale;
+            if !screen_rect_visible(center - anchor + size / 2.0, size) {
+                continue;
+            }
+            let tint = multiply_tint(
+                terrain_tint(snapshot, tile.position, reachable, selected.is_some()),
+                world_tint,
+            );
+            let rotation = if tile.image.starts_with("forest-") {
+                (animation_time as f32 * 1.4
+                    + tile.position.x as f32 * 0.73
+                    + tile.position.y as f32 * 0.91)
+                    .sin()
+                    * 0.012
+            } else {
+                0.0
+            };
+            // center — экранный центр гекса-якоря. terrain_anchor возвращает
+            // точку внутри PNG, которая должна попасть в этот центр. Для
+            // обычного 72x72 тайла это половина размера; большие оригинальные
+            // стены и горы требуют заданных вручную координат.
             draw_texture_ex(
                 texture,
                 center.x - anchor.x,
@@ -2367,43 +3181,19 @@ fn draw_map_android(
                 tint,
                 DrawTextureParams {
                     dest_size: Some(size),
+                    rotation,
                     ..Default::default()
                 },
             );
         }
     }
-    if DEBUG_CASTLE_TILES {
-        for y in 1..=snapshot.map.height as i64 {
-            for x in 1..=snapshot.map.width as i64 {
-                let position = Position { x, y };
-                let Ok(raw) = snapshot.map.raw(position) else {
-                    continue;
-                };
-                let base = raw
-                    .split_whitespace()
-                    .last()
-                    .unwrap_or(raw)
-                    .split('^')
-                    .next()
-                    .unwrap_or(raw);
-                let (label, color) = match base {
-                    "Ce" => ("C", Color::from_rgba(255, 45, 210, 230)),
-                    "Ke" => ("K", Color::from_rgba(30, 235, 255, 230)),
-                    _ => continue,
-                };
-                let center = viewport.world_to_screen(hex_center(x, y));
-                let radius = HEX_RADIUS * viewport.scale * 0.88;
-                draw_wesnoth_hex(center, radius, Color { a: 0.16, ..color });
-                draw_wesnoth_hex_lines(center, radius, 4.0, color);
-                text(font, label, center.x - 6.0, center.y + 7.0, 20.0, WHITE);
-            }
-        }
-    }
     for y in 1..=snapshot.map.height as i64 {
         for x in 1..=snapshot.map.width as i64 {
-            let destination = Position { x, y };
             let center = viewport.world_to_screen(hex_center(x, y));
             let radius = HEX_RADIUS * viewport.scale;
+            if !screen_rect_visible(center, vec2(radius * 2.0, radius * 2.0)) {
+                continue;
+            }
             if show_grid {
                 draw_wesnoth_hex_lines(center, radius, 1.5, Color::from_rgba(20, 28, 20, 180));
             }
@@ -2413,20 +3203,20 @@ fn draw_map_android(
         if let Some(side) = village.side.as_deref() {
             let center =
                 viewport.world_to_screen(hex_center(village.position.x, village.position.y));
-            let color = if side == "player" { SKYBLUE } else { ORANGE };
             let scale = viewport.scale;
-            draw_circle(
-                center.x + 21.0 * scale,
-                center.y - 20.0 * scale,
-                7.0 * scale,
-                color,
-            );
-            draw_circle_lines(
-                center.x + 21.0 * scale,
-                center.y - 20.0 * scale,
-                7.0 * scale,
-                2.0,
-                WHITE,
+            let side_index = usize::from(side != "player");
+            let family = side_flag_family(snapshot, side);
+            let flags = &art.village_flags[family][side_index];
+            let frame = village_flag_frame(animation_time, village.position, flags.len());
+            draw_texture_ex(
+                &flags[frame],
+                center.x - 36.0 * scale,
+                center.y - 36.0 * scale,
+                world_tint,
+                DrawTextureParams {
+                    dest_size: Some(vec2(72.0, 72.0) * scale),
+                    ..Default::default()
+                },
             );
         }
     }
@@ -2484,6 +3274,9 @@ fn draw_map_android(
         draw_wesnoth_hex_lines(center, radius, 4.0, Color::from_rgba(255, 220, 70, 235));
     }
     for object in &snapshot.objects {
+        if animations.actors.contains_key(&object.id) {
+            continue;
+        }
         let center = viewport.world_to_screen(hex_center(object.position.x, object.position.y));
         let scale = viewport.scale;
         if target == Some(object.id.as_str()) {
@@ -2494,7 +3287,7 @@ fn draw_map_android(
                 texture,
                 center.x - 36.0 * scale,
                 center.y - 42.0 * scale,
-                WHITE,
+                world_tint,
                 DrawTextureParams {
                     dest_size: Some(vec2(72.0, 72.0) * scale),
                     ..Default::default()
@@ -2502,6 +3295,88 @@ fn draw_map_android(
             );
         }
         draw_unit_status(center, scale, object);
+    }
+    for (id, actor) in &animations.actors {
+        let Some((world, tint)) = animations.pose(id) else {
+            continue;
+        };
+        let center = viewport.world_to_screen(world);
+        let scale = viewport.scale;
+        if let Some(texture) = art.units.get(actor.type_id.as_str()) {
+            draw_texture_ex(
+                texture,
+                center.x - 36.0 * scale,
+                center.y - 42.0 * scale,
+                multiply_tint(tint, world_tint),
+                DrawTextureParams {
+                    dest_size: Some(vec2(72.0, 72.0) * scale),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn screen_rect_visible(center: Vec2, size: Vec2) -> bool {
+    let half = size / 2.0;
+    center.x + half.x >= 0.0
+        && center.y + half.y >= 0.0
+        && center.x - half.x <= screen_width()
+        && center.y - half.y <= screen_height()
+}
+
+#[cfg(any(target_os = "android", test))]
+fn tod_color(time_of_day: &str) -> Vec3 {
+    match time_of_day {
+        "dawn" => vec3(230.0 / 255.0, 240.0 / 255.0, 1.0),
+        "dusk" => vec3(1.0, 235.0 / 255.0, 220.0 / 255.0),
+        "first_watch" | "second_watch" => vec3(180.0 / 255.0, 210.0 / 255.0, 242.0 / 255.0) * 0.9,
+        _ => Vec3::ONE,
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn is_night(time_of_day: &str) -> bool {
+    matches!(time_of_day, "first_watch" | "second_watch")
+}
+
+#[cfg(target_os = "android")]
+fn multiply_tint(color: Color, tint: Color) -> Color {
+    Color::new(
+        color.r * tint.r,
+        color.g * tint.g,
+        color.b * tint.b,
+        color.a,
+    )
+}
+
+#[cfg(any(target_os = "android", test))]
+fn village_flag_frame(time: f64, position: Position, frame_count: usize) -> usize {
+    ((time * 10.0) as usize + (position.x * 3 + position.y * 5) as usize) % frame_count
+}
+
+#[cfg(target_os = "android")]
+fn side_flag_family(snapshot: &ClientSnapshot, side: &str) -> &'static str {
+    snapshot
+        .objects
+        .iter()
+        .find(|unit| unit.side == side && unit.is_leader)
+        .or_else(|| snapshot.objects.iter().find(|unit| unit.side == side))
+        .map(|unit| flag_family_for_type(&unit.type_id))
+        .unwrap_or("loyalist")
+}
+
+#[cfg(any(target_os = "android", test))]
+fn flag_family_for_type(type_id: &str) -> &'static str {
+    if type_id.starts_with("elvish_") {
+        "wood-elvish"
+    } else if type_id.starts_with("orcish_") {
+        "ragged"
+    } else if matches!(type_id, "dark_sorcerer" | "walking_corpse" | "cockatrice") {
+        "undead"
+    } else {
+        "loyalist"
     }
 }
 
@@ -2512,12 +3387,27 @@ fn castle_texture_index(corner: usize) -> usize {
 
 #[cfg(any(target_os = "android", test))]
 fn terrain_anchor(kind: VisualKind, image: &str, size: Vec2) -> Vec2 {
+    // В оригинальном WML точка привязки задаётся center=... отдельно для
+    // каждого составного изображения. Пока VisualTile её не переносит до
+    // клиента, поэтому известные большие семейства перечислены здесь.
+    // Если спрайт выглядит зеркально правильным, но уехал целиком, проверять
+    // нужно прежде всего эту функцию, а не направления соседей.
     match kind {
-        VisualKind::CastleConvex(_)
-        | VisualKind::CastleConcave(_)
-        | VisualKind::KeepConvex(_)
-        | VisualKind::KeepConcave(_) => vec2(36.0, 108.0),
-        VisualKind::Base if image == "mountains" => vec2(90.0, 144.0),
+        VisualKind::CastleConvex(corner)
+        | VisualKind::CastleConcave(corner)
+        | VisualKind::KeepConvex(corner)
+        | VisualKind::KeepConcave(corner) => {
+            let (x, y) = castle_wall_anchor(corner);
+            vec2(x, y)
+        }
+        VisualKind::Base if image.starts_with("mountains-single-") => vec2(90.0, 108.0),
+        VisualKind::MountainRange => {
+            let (x, y) = mountain_range_anchor(image).unwrap();
+            vec2(x, y)
+        }
+        VisualKind::BridgeEnd(0 | 3) if image == "stone-bridge-end" => vec2(90.0, 108.0),
+        VisualKind::BridgeEnd(1 | 4) if image == "stone-bridge-end" => vec2(63.0, 90.0),
+        VisualKind::BridgeEnd(2 | 5) if image == "stone-bridge-end" => vec2(63.0, 126.0),
         _ => size / 2.0,
     }
 }
@@ -2541,7 +3431,9 @@ fn draw_unit_status(center: Vec2, scale: f32, unit: &ObjectView) {
             RED
         },
     )];
-    bars.push((5.0, experience, SKYBLUE));
+    if unit.experience > 0 {
+        bars.push((5.0, experience, SKYBLUE));
+    }
     for (index, ratio, color) in bars {
         let x = center.x + (17.0 + index) * scale;
         draw_rectangle(
@@ -2603,7 +3495,7 @@ fn draw_wesnoth_hex_lines(center: Vec2, radius: f32, thickness: f32, color: Colo
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 fn terrain_layers(terrain: &str) -> (&str, Option<&str>) {
     match terrain {
         "grassland" => ("grassland", None),
@@ -2612,9 +3504,9 @@ fn terrain_layers(terrain: &str) -> (&str, Option<&str>) {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 fn hex_neighbors(position: Position) -> [Position; 6] {
-    let diagonal_up = if position.x % 2 == 0 { 0 } else { -1 };
+    let diagonal_up = if position.x % 2 == 0 { -1 } else { 0 };
     [
         Position {
             x: position.x,
@@ -2657,7 +3549,7 @@ fn terrain_tint(
     } else if reachable.iter().any(|cell| cell.position == position) {
         Color::new(1.0, 1.0, 0.62, 1.0)
     } else if has_selection {
-        Color::new(0.22, 0.22, 0.22, 1.0)
+        Color::new(0.61, 0.61, 0.61, 1.0)
     } else {
         WHITE
     }
@@ -3199,13 +4091,44 @@ fn draw_game_buttons(
             Color::from_rgba(20, 20, 20, 150),
         );
     }
+    let next = next_unit_rect();
+    let has_next = next_movable_unit(snapshot, None).is_some();
+    dialog_button(font, next, "Следующий", has_next);
+    if !has_next {
+        draw_rectangle(
+            next.x,
+            next.y,
+            next.w,
+            next.h,
+            Color::from_rgba(20, 20, 20, 150),
+        );
+    }
     dialog_button(font, end_turn_rect(), "Конец хода", snapshot.can_end_turn);
+}
+
+#[cfg(target_os = "android")]
+fn next_movable_unit<'a>(
+    snapshot: &'a ClientSnapshot,
+    selected: Option<&str>,
+) -> Option<&'a ObjectView> {
+    let start = selected
+        .and_then(|id| snapshot.objects.iter().position(|unit| unit.id == id))
+        .map_or(0, |index| index + 1);
+    snapshot
+        .objects
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(snapshot.objects.len())
+        .find(|unit| {
+            unit.side == snapshot.active_side && !unit.is_leader && unit.movement_points > 0
+        })
 }
 
 #[cfg(target_os = "android")]
 fn recruit_window_rect() -> Rect {
     let width = screen_width() - ANDROID_PANEL_WIDTH - 32.0;
-    let height = (screen_height() - ANDROID_TOP_BAR_HEIGHT - 28.0).min(420.0);
+    let height = (screen_height() - ANDROID_TOP_BAR_HEIGHT - 28.0).min(520.0);
     Rect::new(16.0, screen_height() - height - 14.0, width, height)
 }
 
@@ -3216,7 +4139,7 @@ fn recruit_tab_rect(veterans: bool) -> Rect {
         window.x + 20.0 + veterans as u8 as f32 * 245.0,
         window.y + 14.0,
         230.0,
-        52.0,
+        64.0,
     )
 }
 
@@ -3225,16 +4148,16 @@ fn recruit_type_rect(index: usize) -> Rect {
     let window = recruit_window_rect();
     Rect::new(
         window.x + 22.0,
-        window.y + 78.0 + index as f32 * 68.0,
+        window.y + 82.0 + index as f32 * 76.0,
         310.0,
-        60.0,
+        68.0,
     )
 }
 
 #[cfg(target_os = "android")]
 fn recruit_cancel_rect() -> Rect {
     let window = recruit_window_rect();
-    Rect::new(window.x + 24.0, window.y + window.h - 70.0, 190.0, 54.0)
+    Rect::new(window.x + 24.0, window.y + window.h - 82.0, 190.0, 66.0)
 }
 
 #[cfg(target_os = "android")]
@@ -3242,9 +4165,9 @@ fn recruit_confirm_rect() -> Rect {
     let window = recruit_window_rect();
     Rect::new(
         window.x + window.w - 234.0,
-        window.y + window.h - 70.0,
+        window.y + window.h - 82.0,
         210.0,
-        54.0,
+        66.0,
     )
 }
 
@@ -3275,6 +4198,70 @@ fn draw_recruit_menu(
     dialog_button(font, recruit_tab_rect(false), "Новобранцы", !menu.veterans);
     dialog_button(font, recruit_tab_rect(true), "Ветераны", menu.veterans);
     let options = if menu.veterans { veterans } else { recruits };
+    draw_unit_choice_options(font, art, options, menu.selected, true, menu.veterans);
+    dialog_button(font, recruit_cancel_rect(), "Отмена", false);
+    dialog_button(
+        font,
+        recruit_confirm_rect(),
+        if menu.veterans {
+            "Призвать"
+        } else {
+            "Нанять"
+        },
+        !options.is_empty(),
+    );
+}
+
+#[cfg(target_os = "android")]
+fn draw_advancement_menu(
+    font: &Font,
+    art: &AndroidArt,
+    pending: &AdvancementView,
+    selected: usize,
+) {
+    draw_rectangle(
+        0.0,
+        ANDROID_TOP_BAR_HEIGHT,
+        screen_width() - ANDROID_PANEL_WIDTH,
+        screen_height() - ANDROID_TOP_BAR_HEIGHT,
+        Color::from_rgba(0, 0, 0, 85),
+    );
+    let window = recruit_window_rect();
+    draw_rectangle(
+        window.x,
+        window.y,
+        window.w,
+        window.h,
+        Color::from_rgba(28, 31, 34, 255),
+    );
+    draw_rectangle_lines(window.x, window.y, window.w, window.h, 3.0, GOLD);
+    text(
+        font,
+        &format!("Выберите повышение для {}", pending.unit),
+        window.x + 24.0,
+        window.y + 48.0,
+        24.0,
+        GOLD,
+    );
+    draw_unit_choice_options(font, art, &pending.details, selected, false, false);
+    dialog_button(
+        font,
+        recruit_confirm_rect(),
+        "Повысить",
+        !pending.details.is_empty(),
+    );
+}
+
+#[cfg(target_os = "android")]
+fn draw_unit_choice_options(
+    font: &Font,
+    art: &AndroidArt,
+    options: &[RecruitOption],
+    selected: usize,
+    show_price: bool,
+    show_experience: bool,
+) {
+    let window = recruit_window_rect();
     for (index, option) in options.iter().take(4).enumerate() {
         let rect = recruit_type_rect(index);
         draw_rectangle(
@@ -3282,7 +4269,7 @@ fn draw_recruit_menu(
             rect.y,
             rect.w,
             rect.h,
-            if index == menu.selected {
+            if index == selected {
                 Color::from_rgba(93, 119, 145, 255)
             } else {
                 Color::from_rgba(45, 49, 53, 255)
@@ -3294,7 +4281,7 @@ fn draw_recruit_menu(
             rect.w,
             rect.h,
             2.0,
-            if index == menu.selected { GOLD } else { GRAY },
+            if index == selected { GOLD } else { GRAY },
         );
         if let Some(sprite) = art.units.get(option.type_id.as_str()) {
             draw_texture_ex(
@@ -3316,16 +4303,18 @@ fn draw_recruit_menu(
             14.0,
             WHITE,
         );
-        text(
-            font,
-            &format!("{} зол.", option.cost),
-            rect.x + 68.0,
-            rect.y + 51.0,
-            13.0,
-            GOLD,
-        );
+        if show_price {
+            text(
+                font,
+                &format!("{} зол.", option.cost),
+                rect.x + 68.0,
+                rect.y + 51.0,
+                13.0,
+                GOLD,
+            );
+        }
     }
-    if let Some(option) = options.get(menu.selected) {
+    if let Some(option) = options.get(selected) {
         let x = window.x + 345.0;
         if let Some(sprite) = art.units.get(option.type_id.as_str()) {
             draw_texture_ex(
@@ -3340,14 +4329,12 @@ fn draw_recruit_menu(
             );
         }
         text(font, &option.name, x + 120.0, window.y + 112.0, 17.0, WHITE);
-        text(
-            font,
-            &format!("Уровень {}   Цена {}", option.level, option.cost),
-            x + 120.0,
-            window.y + 147.0,
-            14.0,
-            GOLD,
-        );
+        let subtitle = if show_price {
+            format!("Уровень {}   Цена {}", option.level, option.cost)
+        } else {
+            format!("Уровень {}", option.level)
+        };
+        text(font, &subtitle, x + 120.0, window.y + 147.0, 14.0, GOLD);
         text(
             font,
             &format!(
@@ -3367,7 +4354,7 @@ fn draw_recruit_menu(
             13.0,
             LIGHTGRAY,
         );
-        if menu.veterans {
+        if show_experience {
             text(
                 font,
                 &format!("Опыт {}/{}", option.experience, option.max_experience),
@@ -3389,17 +4376,6 @@ fn draw_recruit_menu(
             );
         }
     }
-    dialog_button(font, recruit_cancel_rect(), "Отмена", false);
-    dialog_button(
-        font,
-        recruit_confirm_rect(),
-        if menu.veterans {
-            "Призвать"
-        } else {
-            "Нанять"
-        },
-        !options.is_empty(),
-    );
 }
 
 #[cfg(target_os = "android")]
@@ -3426,7 +4402,7 @@ fn end_turn_confirmation_rect() -> Rect {
 #[cfg(target_os = "android")]
 fn end_turn_cancel_rect() -> Rect {
     let window = end_turn_confirmation_rect();
-    Rect::new(window.x + 28.0, window.y + window.h - 82.0, 220.0, 58.0)
+    Rect::new(window.x + 28.0, window.y + window.h - 92.0, 220.0, 68.0)
 }
 
 #[cfg(target_os = "android")]
@@ -3434,9 +4410,9 @@ fn end_turn_confirm_rect() -> Rect {
     let window = end_turn_confirmation_rect();
     Rect::new(
         window.x + window.w - 248.0,
-        window.y + window.h - 82.0,
+        window.y + window.h - 92.0,
         220.0,
-        58.0,
+        68.0,
     )
 }
 
@@ -3461,7 +4437,9 @@ fn draw_end_turn_confirmation(font: &Font, snapshot: &ClientSnapshot) {
     let remaining = snapshot
         .objects
         .iter()
-        .filter(|unit| unit.side == snapshot.active_side && unit.movement_points > 0)
+        .filter(|unit| {
+            unit.side == snapshot.active_side && !unit.is_leader && unit.movement_points > 0
+        })
         .count();
     text(
         font,
@@ -3500,9 +4478,9 @@ fn combat_weapon_rect(index: usize) -> Rect {
     let window = combat_window_rect();
     Rect::new(
         window.x + 18.0,
-        window.y + 218.0 + index as f32 * 70.0,
+        window.y + 218.0 + index as f32 * 78.0,
         window.w - 36.0,
-        62.0,
+        70.0,
     )
 }
 
@@ -3511,9 +4489,9 @@ fn combat_cancel_rect() -> Rect {
     let window = combat_window_rect();
     Rect::new(
         window.x + window.w - 202.0,
-        window.y + window.h - 55.0,
+        window.y + window.h - 74.0,
         176.0,
-        40.0,
+        60.0,
     )
 }
 
@@ -3522,9 +4500,9 @@ fn combat_confirm_rect() -> Rect {
     let window = combat_window_rect();
     Rect::new(
         window.x + window.w - 394.0,
-        window.y + window.h - 55.0,
+        window.y + window.h - 74.0,
         176.0,
-        40.0,
+        60.0,
     )
 }
 
@@ -3756,7 +4734,7 @@ fn dialog_button(font: &Font, rect: Rect, label: &str, primary: bool) {
         2.0,
         if primary { GOLD } else { GRAY },
     );
-    centered_text(font, label, rect, 20.0, WHITE);
+    centered_text(font, label, rect, 22.0, WHITE);
 }
 
 #[cfg(target_os = "android")]
@@ -3783,6 +4761,7 @@ fn unit_name(type_id: &str) -> &str {
 }
 
 #[cfg(not(target_os = "android"))]
+#[allow(clippy::too_many_arguments)]
 fn draw_panel(
     font: &Font,
     scenario_name: &str,
@@ -4171,6 +5150,8 @@ fn read_snapshot(snapshot: GameSnapshot, status: Value) -> Result<ClientSnapshot
                 #[cfg(target_os = "android")]
                 type_id: string(object, "type").unwrap_or_default(),
                 side: string(object, "side").ok_or("snapshot object has no side")?,
+                #[cfg(target_os = "android")]
+                is_leader: matches!(object.get("is_leader"), Some(Value::Bool(true))),
                 position: position(object, "position").ok_or("snapshot object has no position")?,
                 hitpoints: integer(object, "hitpoints").ok_or("snapshot object has no HP")?,
                 max_hitpoints: integer(object, "max_hitpoints")
@@ -4186,10 +5167,15 @@ fn read_snapshot(snapshot: GameSnapshot, status: Value) -> Result<ClientSnapshot
                     .ok_or("snapshot object has no experience")?,
                 max_experience: integer(object, "max_experience")
                     .ok_or("snapshot object has no max experience")?,
+                #[cfg(not(target_os = "android"))]
                 poisoned: matches!(object.get("poisoned"), Some(Value::Bool(true))),
+                #[cfg(not(target_os = "android"))]
                 slowed: matches!(object.get("slowed"), Some(Value::Bool(true))),
+                #[cfg(not(target_os = "android"))]
                 petrified: matches!(object.get("petrified"), Some(Value::Bool(true))),
+                #[cfg(not(target_os = "android"))]
                 unhealable: matches!(object.get("unhealable"), Some(Value::Bool(true))),
+                #[cfg(not(target_os = "android"))]
                 stunned: matches!(object.get("stunned"), Some(Value::Bool(true))),
                 movement_costs: costs,
                 #[cfg(target_os = "android")]
@@ -4273,7 +5259,9 @@ fn read_snapshot(snapshot: GameSnapshot, status: Value) -> Result<ClientSnapshot
                 })
             })
             .collect::<Result<_, String>>()?,
+        #[cfg(not(target_os = "android"))]
         village_income: integer(&status, "income").unwrap_or(0),
+        #[cfg(not(target_os = "android"))]
         gross_income: integer(&status, "gross_income").unwrap_or(0),
         expenses: integer(&status, "expenses").unwrap_or(0),
         net_income: integer(&status, "net_income").unwrap_or(0),
@@ -4297,6 +5285,14 @@ fn read_snapshot(snapshot: GameSnapshot, status: Value) -> Result<ClientSnapshot
                         })
                         .collect::<Result<_, _>>()?,
                     _ => return Err("pending advancement has no options".into()),
+                },
+                #[cfg(target_os = "android")]
+                details: match pending.get("details") {
+                    Some(Value::List(options)) => options
+                        .iter()
+                        .map(read_recruit_option)
+                        .collect::<Result<_, _>>()?,
+                    _ => return Err("pending advancement has no details".into()),
                 },
             }),
             Some(Value::Nil) | None => None,
@@ -4423,12 +5419,17 @@ fn read_actions(game: &Game, object: &str, inspect: bool) -> Result<AvailableAct
         values.insert("inspect".into(), Value::Bool(true));
     }
     let value = game.query("actions", command)?;
+    parse_actions(&value)
+}
+
+fn parse_actions(value: &Value) -> Result<AvailableActions, String> {
     let reachable = value_list(&value, "reachable")?
         .iter()
         .map(|cell| {
             Ok(ReachableCell {
                 position: position(cell, "position")
                     .ok_or_else(|| "reachable cell has no position".to_owned())?,
+                #[cfg(target_os = "android")]
                 path: value_list(cell, "path")?
                     .iter()
                     .map(|point| {
@@ -4436,7 +5437,9 @@ fn read_actions(game: &Game, object: &str, inspect: bool) -> Result<AvailableAct
                             .ok_or_else(|| "reachable path has an invalid position".to_owned())
                     })
                     .collect::<Result<_, _>>()?,
+                #[cfg(target_os = "android")]
                 cost: integer(cell, "cost").ok_or("reachable cell has no cost")?,
+                #[cfg(target_os = "android")]
                 stopped_by_zoc: matches!(cell.get("zoc"), Some(Value::Bool(true))),
             })
         })
@@ -4513,6 +5516,7 @@ fn number(value: &Value, key: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("combat preview has no {key}"))
 }
 
+#[cfg(target_os = "android")]
 fn attack_command(attacker: &str, defender: &str, weapon: &str) -> Value {
     Value::Map(std::collections::BTreeMap::from([
         ("attacker".into(), Value::String(attacker.into())),
@@ -4521,6 +5525,7 @@ fn attack_command(attacker: &str, defender: &str, weapon: &str) -> Value {
     ]))
 }
 
+#[cfg(target_os = "android")]
 fn position_from_value(value: &Value) -> Option<Position> {
     Some(Position {
         x: integer(value, "x")?,
@@ -4559,6 +5564,7 @@ fn position_value(position: Position) -> Value {
     ]))
 }
 
+#[cfg(target_os = "android")]
 fn scenario_path(id: &str) -> Option<&'static str> {
     match id {
         "02_the_chase" => Some("scenarios/the_chase.wml"),
@@ -4633,18 +5639,6 @@ fn draw_dialog(font: &Font, dialog: &DialogView) {
         text(font, &line, box_x + 24.0, y, body_size, WHITE);
         y += line_height;
     }
-    text(
-        font,
-        &format!(
-            "Enter / Space / click    {}/{}",
-            dialog.current + 1,
-            dialog.lines.len()
-        ),
-        box_x + 24.0,
-        box_y + box_height - 24.0,
-        19.0,
-        GRAY,
-    );
 }
 
 fn wrapped_lines(font: &Font, text: &str, max_width: f32, font_size: f32) -> Vec<String> {
@@ -4669,6 +5663,16 @@ fn wrapped_lines(font: &Font, text: &str, max_width: f32, font_size: f32) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_core_art_covers_every_imported_unit_type() {
+        assert_eq!(core_unit_art::ALL.len(), 308);
+        assert!(
+            core_unit_art::ALL
+                .iter()
+                .all(|(id, bytes)| !id.is_empty() && !bytes.is_empty())
+        );
+    }
 
     #[test]
     fn viewport_conversion_is_reversible() {
@@ -4716,16 +5720,25 @@ mod tests {
             vec![1, 2, 3, 4, 5, 0]
         );
         assert_eq!(
-            terrain_anchor(
-                VisualKind::CastleConvex(0),
-                "castle-convex",
-                vec2(126.0, 180.0)
-            ),
-            vec2(36.0, 108.0)
+            (0..6)
+                .map(|corner| terrain_anchor(
+                    VisualKind::CastleConvex(corner),
+                    "castle-convex",
+                    vec2(126.0, 180.0)
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                vec2(36.0, 108.0),
+                vec2(36.0, 108.0),
+                vec2(36.0, 36.0),
+                vec2(90.0, 72.0),
+                vec2(90.0, 72.0),
+                vec2(90.0, 144.0),
+            ]
         );
         assert_eq!(
-            terrain_anchor(VisualKind::Base, "mountains", vec2(180.0, 216.0)),
-            vec2(90.0, 144.0)
+            terrain_anchor(VisualKind::Base, "mountains-single-1", vec2(180.0, 216.0)),
+            vec2(90.0, 108.0)
         );
     }
 
@@ -4751,6 +5764,61 @@ mod tests {
             ),
         ]));
         assert_eq!(attack_description(&attack), "Лук  5×4  дальн/кол · снайпер");
+    }
+
+    #[test]
+    fn animation_duration_scales_with_the_travel_path() {
+        let short = VisualClip::Move {
+            unit: "u".into(),
+            path: vec![Position { x: 1, y: 1 }, Position { x: 2, y: 1 }],
+        };
+        let long = VisualClip::Move {
+            unit: "u".into(),
+            path: vec![
+                Position { x: 1, y: 1 },
+                Position { x: 2, y: 1 },
+                Position { x: 3, y: 1 },
+            ],
+        };
+        assert!(matches!(&short, VisualClip::Move { unit, .. } if unit == "u"));
+        assert!(long.duration() > short.duration());
+        let strike = VisualClip::Strike {
+            source: "a".into(),
+            target: "b".into(),
+            hit: true,
+        };
+        assert!(matches!(
+            &strike,
+            VisualClip::Strike { source, target, hit }
+                if source == "a" && target == "b" && *hit
+        ));
+        assert_eq!(strike.duration(), 0.28);
+    }
+
+    #[test]
+    fn time_of_day_darkens_night_and_selects_night_art() {
+        assert_eq!(tod_color("morning"), Vec3::ONE);
+        assert!(tod_color("first_watch").x < tod_color("dawn").x);
+        assert!(is_night("second_watch"));
+        assert!(!is_night("dusk"));
+    }
+
+    #[test]
+    fn village_flags_animate_and_use_coordinate_phase() {
+        let first = Position { x: 1, y: 1 };
+        let second = Position { x: 2, y: 1 };
+        assert_ne!(
+            village_flag_frame(0.0, first, 4),
+            village_flag_frame(0.0, second, 4)
+        );
+        assert_eq!(
+            village_flag_frame(0.1, first, 4),
+            (village_flag_frame(0.0, first, 4) + 1) % 4
+        );
+        assert_eq!(flag_family_for_type("elvish_hero"), "wood-elvish");
+        assert_eq!(flag_family_for_type("orcish_warrior"), "ragged");
+        assert_eq!(flag_family_for_type("dark_sorcerer"), "undead");
+        assert_eq!(flag_family_for_type("knight"), "loyalist");
     }
 
     #[test]

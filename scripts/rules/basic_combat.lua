@@ -9,6 +9,8 @@ local function child(node, name)
 end
 
 local function side_team(context, id)
+    local overridden = context.state:get("team:" .. id)
+    if overridden then return overridden end
     local current = assert(context.state:get("scenario"), "missing scenario state")
     for _, side in ipairs(children(current, "side")) do
         if side.id == id then return side.team_name end
@@ -25,12 +27,13 @@ function combat.are_enemies(context, first, second)
     return not allied(context, first, second)
 end
 
-local function has_special(attack, id)
+local function weapon_special(attack, id)
     for _, special in ipairs(children(attack, "special")) do
-        if special.id == id then return true end
+        if special.id == id then return special end
     end
-    return false
 end
+
+local function has_special(attack, id) return weapon_special(attack, id) ~= nil end
 
 local function ability(unit, id)
     for _, candidate in ipairs(children(unit, "ability")) do
@@ -257,6 +260,10 @@ local function finish_side(context, side)
 end
 
 local function finished(context, result, dialog)
+    if context.state:get("pending_advancement") then
+        context.state:set("pending_finish", { result = result, dialog = dialog })
+        return
+    end
     context.state:set("finished", true)
     context.state:set("result", result)
     local achievements = {}
@@ -366,7 +373,15 @@ local function objective_event(context, defeated, killer)
                 context.state:set("campaign:" .. objective.killer_variable, killer)
             end
             for _, variable in ipairs(children(objective, "campaign_variable")) do
-                context.state:set("campaign:" .. variable.name, variable.value)
+                local value = variable.value
+                if variable.options then
+                    local options = {}
+                    for option in string.gmatch(variable.options, "[^,]+") do
+                        options[#options + 1] = option:match("^%s*(.-)%s*$")
+                    end
+                    value = options[context.random:integer(1, #options)]
+                end
+                context.state:set("campaign:" .. variable.name, value)
             end
             return finished(context, objective.result, objective.dialog)
         end
@@ -392,6 +407,8 @@ end
 local function position_key(position)
     return position.x .. "," .. position.y
 end
+
+local time_of_day
 
 local function visibility(context, side_id)
     local side = side_config(context, side_id)
@@ -429,10 +446,19 @@ local function visibility(context, side_id)
 end
 
 local function hidden_from(context, side_id, object)
-    local ambush = ability(object, "ambush")
+    local terrain = context.map:get(object.position)
+    local time = time_of_day(context)
+    local hides = ability(object, "ambush") and terrain == "forest"
+        or ability(object, "concealment") and terrain == "village"
+        or ability(object, "submerge") and terrain == "water"
+        or ability(object, "swamp_lurk") and terrain == "water"
+        or ability(object, "burrow") and (terrain == "forest" or terrain == "grassland")
+            and object.resting
+        or ability(object, "nightstalk") and time.lawful_bonus < 0
+    local configured = ability(object, "ambush")
+    if configured and configured.terrain then hides = configured.terrain == terrain end
     local concealed = object.hidden == true or object.hidden == "yes"
-        or (ambush and (not ambush.terrain
-            or ambush.terrain == context.map:get(object.position)))
+        or hides
     if not concealed then return false end
     for _, viewer in ipairs(context.objects:all()) do
         if allied(context, viewer.side, side_id)
@@ -448,6 +474,38 @@ local function visible_to(context, side_id, object)
     if hidden_from(context, side_id, object) then return false end
     local visible = visibility(context, side_id)
     return visible == nil or visible[position_key(object.position)] ~= nil
+end
+
+local function sighted_by_side(context, side_id, object)
+    local radius = side_config(context, side_id).vision_radius
+        or scenario(context).vision_radius or 2
+    local frontier, visited = {}, {}
+    for _, viewer in ipairs(context.objects:all()) do
+        if viewer.side == side_id then
+            local key = position_key(viewer.position)
+            visited[key] = 0
+            frontier[#frontier + 1] = { position = viewer.position, distance = 0 }
+        end
+    end
+    local index = 1
+    while index <= #frontier do
+        local current = frontier[index]
+        index = index + 1
+        if current.position.x == object.position.x
+            and current.position.y == object.position.y then return true end
+        if current.distance < radius then
+            for _, position in ipairs(context.map:neighbors(current.position)) do
+                local key = position_key(position)
+                if visited[key] == nil then
+                    visited[key] = current.distance + 1
+                    frontier[#frontier + 1] = {
+                        position = position, distance = current.distance + 1,
+                    }
+                end
+            end
+        end
+    end
+    return false
 end
 
 function combat.can_see(context, side_id, object)
@@ -595,7 +653,7 @@ end
 
 local function attack_event(context, attacker, defender, defeated)
     for _, trigger in ipairs(children(scenario(context), "attack_event")) do
-        local key = "attack_event:" .. trigger.id
+        local key = "attack_event:" .. (trigger.group or trigger.id)
         if not context.state:get(key)
             and (not trigger.attacker or trigger.attacker == attacker.id)
             and (not trigger.defender or trigger.defender == defender.id) then
@@ -608,6 +666,38 @@ local function attack_event(context, attacker, defender, defeated)
                 event.achievement = trigger.achievement
             end
             return event
+        end
+    end
+end
+
+local function sight_event(context, viewer)
+    for _, trigger in ipairs(children(scenario(context), "sight_event")) do
+        local key = "sight_event:" .. trigger.id
+        if not context.state:get(key)
+            and (not trigger.viewer_side or trigger.viewer_side == viewer.side) then
+            local target = trigger.target and context.objects:get(trigger.target)
+            if not target and trigger.target_side then
+                for _, candidate in ipairs(context.objects:all()) do
+                    if candidate.side == trigger.target_side
+                        and sighted_by_side(context, viewer.side, candidate) then
+                        target = candidate
+                        break
+                    end
+                end
+            end
+            if target and sighted_by_side(context, viewer.side, target) then
+                context.state:set(key, true)
+                if trigger.set_team_side and trigger.set_team_name then
+                    context.state:set("team:" .. trigger.set_team_side, trigger.set_team_name)
+                end
+                if trigger.ally_side and trigger.ally_team_name then
+                    context.state:set("team:" .. trigger.ally_side, trigger.ally_team_name)
+                end
+                local spawned = spawn_group(context, trigger.spawn_group)
+                return { type = "sight_event", id = trigger.id,
+                    viewer = viewer.id, target = target.id,
+                    dialog = trigger.dialog, spawned = spawned }
+            end
         end
     end
 end
@@ -628,15 +718,19 @@ end
 local function advancement_options(object)
     local result = {}
     for id in string.gmatch(object.advances_to or "", "[^,%s]+") do
-        result[#result + 1] = id
+        if id ~= "null" then result[#result + 1] = id end
     end
     return result
 end
 
+local apply_traits
+
 local type_properties = {
     id = true, type = true, name = true, max_hitpoints = true, max_moves = true,
     cost = true, level = true, max_experience = true, advances_to = true,
-    alignment = true, __children = true,
+    alignment = true, race = true, image = true, profile = true, usage = true,
+    movement_type = true, num_traits = true, gender = true, zoc = true,
+    traits = true, traits_applied = true, __children = true,
 }
 
 local function apply_advancement(context, object, choice)
@@ -654,6 +748,9 @@ local function apply_advancement(context, object, choice)
     advanced.y = object.position.y
     advanced.position = object.position
     advanced.experience = remaining
+    advanced.traits = object.traits
+    advanced.traits_applied = nil
+    apply_traits(context, advanced)
     advanced.hitpoints = advanced.max_hitpoints
     advanced.movement_points = 0
     advanced.attacks_left = 0
@@ -707,7 +804,7 @@ local times = {
     { id = "second_watch", lawful_bonus = -25 },
 }
 
-local function time_of_day(context)
+time_of_day = function(context)
     return times[(context.state:get("turn") - 1) % #times + 1]
 end
 
@@ -730,6 +827,42 @@ local function leadership_bonus(context, source)
     return bonus
 end
 
+local function illuminated_lawful_bonus(context, source, base)
+    local increase = 0
+    for _, unit in ipairs(context.objects:all()) do
+        local light = ability(unit, "illuminates")
+        if light and (unit.id == source.id
+            or context.map:are_adjacent(unit.position, source.position)) then
+            increase = math.max(increase, light.value or 25)
+        end
+    end
+    return math.min(25, base + increase)
+end
+
+local function opposite_hex(target, source)
+    local function axial(position)
+        local q = position.x - 1
+        return q, position.y - 1 - math.floor((q + q % 2) / 2)
+    end
+    local tq, tr = axial(target)
+    local sq, sr = axial(source)
+    local q, r = 2 * tq - sq, 2 * tr - sr
+    return { x = q + 1, y = r + math.floor((q + q % 2) / 2) + 1 }
+end
+
+local function backstab_active(context, source, target, attack, attacking)
+    if not attacking or not has_special(attack, "backstab") then return false end
+    local opposite = opposite_hex(target.position, source.position)
+    for _, flanker in ipairs(context.objects:all()) do
+        if flanker.position.x == opposite.x and flanker.position.y == opposite.y
+            and not allied(context, flanker.side, target.side)
+            and not flanker.petrified and not flanker.stunned then
+            return true
+        end
+    end
+    return false
+end
+
 local function attack_stats(context, source, target, attack, attacking, slowed)
     local terrain = context.map:get(target.position)
     local defense = assert(child(target, "defense")[terrain],
@@ -740,12 +873,15 @@ local function attack_stats(context, source, target, attack, attacking, slowed)
     elseif attacking and has_special(attack, "marksman") then
         chance = math.max(chance, 60)
     end
+    chance = math.max(0, math.min(100, chance + (attack.accuracy or 0)))
     local damage_type = assert(attack.damage_type, "attack has no damage type")
     local resistance = assert(child(target, "resistance")[damage_type],
         "unit has no resistance for damage type: " .. damage_type)
     local time = time_of_day(context)
     local alignment = source.alignment or "neutral"
-    local alignment_bonus = alignment_modifier(alignment, time.lawful_bonus)
+    local lawful_bonus = illuminated_lawful_bonus(context, source, time.lawful_bonus)
+    local alignment_bonus = alignment_modifier(alignment, lawful_bonus)
+    if source.fearless and alignment_bonus < 0 then alignment_bonus = 0 end
     local leadership = leadership_bonus(context, source)
     local slow_modifier = (slowed == nil and source.slowed or slowed) and 50 or 100
     local effective_resistance = resistance
@@ -756,6 +892,9 @@ local function attack_stats(context, source, target, attack, attacking, slowed)
         math.floor(attack.damage * (100 + alignment_bonus + leadership)
             * (100 - effective_resistance)
             * slow_modifier / 1000000 + 0.5))
+    if backstab_active(context, source, target, attack, attacking) then
+        modified_damage = modified_damage * (weapon_special(attack, "backstab").multiply or 2)
+    end
     return chance, modified_damage, damage_type, resistance, effective_resistance,
         time, alignment, alignment_bonus, leadership
 end
@@ -765,13 +904,22 @@ local function retaliation_for(context, attacker, defender, attack)
     for _, candidate in ipairs(children(defender, "attack")) do
         if candidate.range == attack.range and (candidate.defense_weight or 1) > 0 then
             local chance, damage = attack_stats(context, defender, attacker, candidate, false)
-            local rating = candidate.strikes * damage * chance * (candidate.defense_weight or 1)
+            local strikes = has_special(candidate, "swarm") and math.max(1,
+                math.floor(candidate.strikes * defender.hitpoints / defender.max_hitpoints))
+                or candidate.strikes
+            local rating = strikes * damage * chance * (candidate.defense_weight or 1)
             if not best_rating or rating > best_rating then
                 best, best_rating = candidate, rating
             end
         end
     end
     return best
+end
+
+
+local function effective_strikes(unit, attack)
+    if not has_special(attack, "swarm") then return attack.strikes end
+    return math.max(1, math.floor(attack.strikes * unit.hitpoints / unit.max_hitpoints))
 end
 
 function combat.preview_attack(context, command)
@@ -789,11 +937,35 @@ function combat.preview_attack(context, command)
             attack_stats(context, defender, attacker, retaliation, false)
         _, slowed_retaliation_damage =
             attack_stats(context, defender, attacker, retaliation, false, true)
-        retaliation_strikes = retaliation.strikes
+        retaliation_strikes = effective_strikes(defender, retaliation)
+    end
+    local attack_deflect = weapon_special(attack, "deflect")
+    local retaliation_deflect = retaliation and weapon_special(retaliation, "deflect")
+    chance = math.max(0, chance - (retaliation and retaliation.parry or 0)
+        - (retaliation_deflect and retaliation_deflect.sub or 0))
+    retaliation_chance = math.max(0,
+        retaliation_chance - (attack.parry or 0)
+            - (attack_deflect and attack_deflect.sub or 0))
+    local attack_absorb = weapon_special(attack, "absorb")
+    local retaliation_absorb = retaliation and weapon_special(retaliation, "absorb")
+    if retaliation_absorb then
+        damage = damage * retaliation_absorb.multiply
+        slowed_damage = slowed_damage * retaliation_absorb.multiply
+    end
+    if attack_absorb then
+        retaliation_damage = retaliation_damage * attack_absorb.multiply
+        slowed_retaliation_damage = slowed_retaliation_damage * attack_absorb.multiply
+    end
+    local charge = weapon_special(attack, "charge")
+    if charge then
+        local multiplier = charge.multiply or 2
+        damage, slowed_damage = damage * multiplier, slowed_damage * multiplier
+        retaliation_damage = retaliation_damage * multiplier
+        slowed_retaliation_damage = slowed_retaliation_damage * multiplier
     end
     local berserk = has_special(attack, "berserk")
         or (retaliation and has_special(retaliation, "berserk"))
-    local strikes = berserk and 30 or attack.strikes
+    local strikes = berserk and 30 or effective_strikes(attacker, attack)
     if berserk and retaliation then retaliation_strikes = 30 end
     local retaliation_first = retaliation and has_special(retaliation, "first_strike")
         and not has_special(attack, "first_strike")
@@ -885,10 +1057,13 @@ function combat.preview_attack(context, command)
     }
 end
 
-local function strike(context, events, source, target, attack, number, attacking)
+local function strike(context, events, source, target, attack, number, attacking,
+    multiplier, chance_reduction)
     local chance, modified_damage, damage_type, resistance, effective_resistance,
         time, alignment, alignment_bonus, leadership =
         attack_stats(context, source, target, attack, attacking)
+    modified_damage = modified_damage * (multiplier or 1)
+    chance = math.max(0, chance - (chance_reduction or 0))
     local roll = context.random:integer(1, 100)
     local hit = roll <= chance
     local damage = 0
@@ -966,10 +1141,109 @@ local function strike(context, events, source, target, attack, number, attacking
     }
 end
 
+local function increased(value, amount, multiplier)
+    if amount == nil then return value end
+    multiplier = multiplier or 1
+    if type(amount) == "number" then return value + amount * multiplier end
+    local percent = string.match(amount, "^([+-]?%d+)%%$")
+    if percent then return math.floor(value * (100 + tonumber(percent)) / 100) end
+    return value + assert(tonumber(amount), "invalid trait increase: " .. tostring(amount))
+        * multiplier
+end
+
+local function trait_matches_attack(effect, attack)
+    return (not effect.range or effect.range == attack.range)
+        and (not effect.damage_type or effect.damage_type == attack.damage_type)
+end
+
+local function apply_trait_effect(object, effect)
+    local multiplier = effect.times == "per level" and object.level or 1
+    if effect.apply_to == "hitpoints" then
+        object.max_hitpoints = math.max(1,
+            increased(object.max_hitpoints, effect.increase_total, multiplier))
+    elseif effect.apply_to == "movement" then
+        object.max_moves = math.max(0, increased(object.max_moves, effect.increase, multiplier))
+    elseif effect.apply_to == "max_experience" then
+        object.max_experience = math.max(1,
+            increased(object.max_experience, effect.increase, multiplier))
+    elseif effect.apply_to == "attack" then
+        for _, attack in ipairs(children(object, "attack")) do
+            if trait_matches_attack(effect, attack) then
+                attack.damage = math.max(0,
+                    increased(attack.damage, effect.increase_damage, multiplier))
+                attack.strikes = math.max(0,
+                    increased(attack.strikes, effect.increase_attacks, multiplier))
+            end
+        end
+    elseif effect.apply_to == "status" and effect.add then
+        object[effect.add] = true
+    elseif effect.apply_to == "healthy" or effect.apply_to == "fearless"
+        or effect.apply_to == "loyal" then
+        object[effect.apply_to] = true
+    end
+end
+
+apply_traits = function(context, object)
+    if object.traits_applied then return end
+    local definitions = {}
+    local mandatory = {}
+    local candidates = {}
+    local function add(definition, required)
+        if not definition or not definition.id then return end
+        definitions[definition.id] = definition
+        if required then
+            mandatory[definition.id] = true
+        else
+            candidates[definition.id] = true
+        end
+    end
+
+    local races = context.state:get("races") or {}
+    local race = object.race and races[object.race] or nil
+    if not race or not race.ignore_global_traits then
+        for _, definition in pairs(context.state:get("traits") or {}) do add(definition, false) end
+    end
+    if race then
+        for _, definition in ipairs(children(race, "trait")) do
+            add(definition, definition.availability == "musthave")
+        end
+    end
+    for _, definition in ipairs(children(object, "trait")) do add(definition, true) end
+
+    local selected = {}
+    if object.traits then
+        for _, id in ipairs(object.traits) do selected[#selected + 1] = id end
+    else
+        for id in pairs(mandatory) do selected[#selected + 1] = id end
+        table.sort(selected)
+        local pool = {}
+        for id in pairs(candidates) do
+            if not mandatory[id] then pool[#pool + 1] = id end
+        end
+        table.sort(pool)
+        local count = object.num_traits or race and race.num_traits or 0
+        for _ = 1, math.min(count, #pool) do
+            local index = context.random:integer(1, #pool)
+            selected[#selected + 1] = table.remove(pool, index)
+        end
+    end
+    for _, id in ipairs(selected) do
+        local definition = definitions[id]
+        if definition then
+            for _, effect in ipairs(children(definition, "effect")) do
+                apply_trait_effect(object, effect)
+            end
+        end
+    end
+    object.traits = selected
+    object.traits_applied = true
+end
+
 function combat.initialize(context)
     local occupied = {}
     local reserves = {}
     for _, object in ipairs(context.objects:all()) do
+        apply_traits(context, object)
         local position = { x = assert(object.x), y = assert(object.y) }
         context.map:get(position)
         local key = position.x .. "," .. position.y
@@ -984,6 +1258,12 @@ function combat.initialize(context)
         context.objects:set(object.id, "movement_points", assert(object.max_moves))
         context.objects:set(object.id, "attacks_left", 1)
         context.objects:set(object.id, "experience", object.experience or 0)
+        context.objects:set(object.id, "max_hitpoints", object.max_hitpoints)
+        context.objects:set(object.id, "max_moves", object.max_moves)
+        context.objects:set(object.id, "max_experience", object.max_experience)
+        context.objects:set(object.id, "traits", object.traits)
+        context.objects:set(object.id, "traits_applied", true)
+        context.objects:set(object.id, "__children", object.__children)
         context.objects:set(object.id, "resting", false)
         context.objects:set(object.id, "poisoned", object.poisoned == true or object.poisoned == "yes")
         context.objects:set(object.id, "slowed", object.slowed == true or object.slowed == "yes")
@@ -1036,6 +1316,7 @@ function combat.snapshot(context)
     local result = {}
     for _, object in ipairs(context.objects:all()) do
         local attacks = {}
+        local traits = object.traits or {}
         for _, attack in ipairs(children(object, "attack")) do
             local specials = {}
             for _, special in ipairs(children(attack, "special")) do
@@ -1055,7 +1336,11 @@ function combat.snapshot(context)
             id = object.id,
             type = object.type,
             name = object.name,
+            race = object.race,
+            image = object.image,
+            traits = traits,
             side = object.side,
+            is_leader = is_recruiter(object),
             position = object.position,
             hitpoints = object.hitpoints,
             max_hitpoints = object.max_hitpoints,
@@ -1078,6 +1363,45 @@ function combat.snapshot(context)
         }
     end
     return result
+end
+
+local function unit_option(id, unit, cost)
+    local attacks = {}
+    local traits = {}
+    for _, trait in ipairs(children(unit, "trait")) do
+        traits[#traits + 1] = trait.id
+    end
+    for _, attack in ipairs(children(unit, "attack")) do
+        local specials = {}
+        for _, special in ipairs(children(attack, "special")) do
+            specials[#specials + 1] = special.id
+        end
+        attacks[#attacks + 1] = {
+            name = attack.name or attack.id,
+            damage = attack.damage,
+            strikes = attack.strikes,
+            range = attack.range,
+            damage_type = attack.damage_type,
+            specials = specials,
+        }
+    end
+    return {
+        id = id,
+        type = unit.type or id,
+        name = unit.name or id,
+        race = unit.race,
+        image = unit.image,
+        traits = traits,
+        cost = cost or unit.cost,
+        hitpoints = unit.hitpoints or unit.max_hitpoints,
+        max_hitpoints = unit.max_hitpoints,
+        max_moves = unit.max_moves,
+        level = unit.level,
+        experience = unit.experience,
+        max_experience = unit.max_experience,
+        alignment = unit.alignment,
+        attacks = attacks,
+    }
 end
 
 function combat.status(context)
@@ -1119,65 +1443,23 @@ function combat.status(context)
     local templates = assert(context.state:get("unit_types"), "missing unit types")
     for _, id in ipairs(recruit_types) do
         local unit = assert(templates[id], "unknown unit type")
-        local attacks = {}
-        for _, attack in ipairs(children(unit, "attack")) do
-            local specials = {}
-            for _, special in ipairs(children(attack, "special")) do
-                specials[#specials + 1] = special.id
-            end
-            attacks[#attacks + 1] = {
-                name = attack.name or attack.id,
-                damage = attack.damage,
-                strikes = attack.strikes,
-                range = attack.range,
-                damage_type = attack.damage_type,
-                specials = specials,
-            }
-        end
-        recruit_options[#recruit_options + 1] = {
-            id = id,
-            name = unit.name or id,
-            cost = unit.cost,
-            max_hitpoints = unit.max_hitpoints,
-            max_moves = unit.max_moves,
-            level = unit.level,
-            alignment = unit.alignment,
-            attacks = attacks,
-        }
+        recruit_options[#recruit_options + 1] = unit_option(id, unit)
     end
     local recall_units = {}
     local recall_options = {}
     for _, unit in ipairs(context.state:get("recall") or {}) do
         recall_units[#recall_units + 1] = unit.id
-        local attacks = {}
-        for _, attack in ipairs(children(unit, "attack")) do
-            local specials = {}
-            for _, special in ipairs(children(attack, "special")) do
-                specials[#specials + 1] = special.id
-            end
-            attacks[#attacks + 1] = {
-                name = attack.name or attack.id,
-                damage = attack.damage,
-                strikes = attack.strikes,
-                range = attack.range,
-                damage_type = attack.damage_type,
-                specials = specials,
-            }
+        recall_options[#recall_options + 1] = unit_option(
+            unit.id, unit, scenario(context).recall_cost or 20)
+    end
+    local pending_advancement = context.state:get("pending_advancement")
+    if pending_advancement then
+        pending_advancement.details = {}
+        for _, id in ipairs(pending_advancement.options) do
+            local unit = assert(templates[id], "unknown advancement type")
+            pending_advancement.details[#pending_advancement.details + 1] =
+                unit_option(id, unit)
         end
-        recall_options[#recall_options + 1] = {
-            id = unit.id,
-            type = unit.type,
-            name = unit.name or unit.id,
-            cost = scenario(context).recall_cost or 20,
-            hitpoints = unit.hitpoints,
-            max_hitpoints = unit.max_hitpoints,
-            max_moves = unit.max_moves,
-            level = unit.level,
-            experience = unit.experience,
-            max_experience = unit.max_experience,
-            alignment = unit.alignment,
-            attacks = attacks,
-        }
     end
     local recruit_hexes = {}
     for _, leader in ipairs(context.objects:all()) do
@@ -1221,7 +1503,7 @@ function combat.status(context)
         expenses = balance.expenses,
         gross_income = balance.gross_income,
         net_income = balance.net_income,
-        pending_advancement = context.state:get("pending_advancement"),
+        pending_advancement = pending_advancement,
         pending_choice = context.state:get("pending_choice"),
         time_of_day = time.id,
         lawful_bonus = time.lawful_bonus,
@@ -1303,6 +1585,7 @@ function combat.recruit(context, command)
     object.x = destination.x
     object.y = destination.y
     object.position = destination
+    apply_traits(context, object)
     object.hitpoints = object.max_hitpoints
     object.movement_points = 0
     object.attacks_left = 0
@@ -1369,6 +1652,7 @@ end
 
 
 function combat.advance(context, command)
+    assert_playing(context)
     assert_no_pending_choice(context)
     local pending = assert(context.state:get("pending_advancement"),
         "no advancement choice is pending")
@@ -1384,6 +1668,11 @@ function combat.advance(context, command)
     for _, candidate in ipairs(context.objects:all()) do
         local next_event = advance_unit(context, candidate)
         if next_event then return { advanced, next_event } end
+    end
+    local pending_finish = context.state:get("pending_finish")
+    if pending_finish then
+        context.state:set("pending_finish", nil)
+        return { advanced, finished(context, pending_finish.result, pending_finish.dialog) }
     end
     return advanced
 end
@@ -1415,32 +1704,50 @@ function combat.resolve(context, command)
     context.objects:set(attacker.id, "resting", false)
     local berserk = has_special(attack, "berserk")
         or (retaliation and has_special(retaliation, "berserk"))
-    local rounds = berserk and 30
-        or math.max(attack.strikes, retaliation and retaliation.strikes or 0)
-    local attacker_strikes = berserk and rounds or attack.strikes
-    local defender_strikes = berserk and rounds or (retaliation and retaliation.strikes or 0)
+    local attacker_strikes = effective_strikes(attacker, attack)
+    local defender_strikes = retaliation and effective_strikes(defender, retaliation) or 0
+    local rounds = berserk and 30 or math.max(attacker_strikes, defender_strikes)
+    if berserk then attacker_strikes, defender_strikes = rounds, retaliation and rounds or 0 end
+    local charge = weapon_special(attack, "charge")
+    local charge_multiplier = charge and (charge.multiply or 2) or 1
+    local attack_multiplier = charge_multiplier
+    local defense_multiplier = charge_multiplier
+    local attack_absorb = weapon_special(attack, "absorb")
+    local retaliation_absorb = retaliation and weapon_special(retaliation, "absorb")
+    if retaliation_absorb then attack_multiplier = attack_multiplier * retaliation_absorb.multiply end
+    if attack_absorb then defense_multiplier = defense_multiplier * attack_absorb.multiply end
+    local attack_deflect = weapon_special(attack, "deflect")
+    local retaliation_deflect = retaliation and weapon_special(retaliation, "deflect")
     local retaliation_first = retaliation and has_special(retaliation, "first_strike")
         and not has_special(attack, "first_strike")
 
     for round = 1, rounds do
         if retaliation_first then
             if retaliation and round <= defender_strikes and attacker.hitpoints > 0 then
-                strike(context, events, defender, attacker, retaliation, round, false)
+                strike(context, events, defender, attacker, retaliation, round, false,
+                    defense_multiplier, (attack.parry or 0)
+                        + (attack_deflect and attack_deflect.sub or 0))
             end
             if attacker.hitpoints == 0 or attacker.petrified then break end
             if round <= attacker_strikes and defender.hitpoints > 0 then
-                strike(context, events, attacker, defender, attack, round, true)
+                strike(context, events, attacker, defender, attack, round, true,
+                    attack_multiplier, (retaliation and retaliation.parry or 0)
+                        + (retaliation_deflect and retaliation_deflect.sub or 0))
             end
             if defender.hitpoints == 0 then break end
             if defender.petrified then break end
         else
             if round <= attacker_strikes and defender.hitpoints > 0 then
-                strike(context, events, attacker, defender, attack, round, true)
+                strike(context, events, attacker, defender, attack, round, true,
+                    attack_multiplier, (retaliation and retaliation.parry or 0)
+                        + (retaliation_deflect and retaliation_deflect.sub or 0))
             end
             if defender.hitpoints == 0 then break end
             if defender.petrified then break end
             if retaliation and round <= defender_strikes and attacker.hitpoints > 0 then
-                strike(context, events, defender, attacker, retaliation, round, false)
+                strike(context, events, defender, attacker, retaliation, round, false,
+                    defense_multiplier, (attack.parry or 0)
+                        + (attack_deflect and attack_deflect.sub or 0))
             end
             if attacker.hitpoints == 0 then break end
             if attacker.petrified then break end
@@ -1460,6 +1767,13 @@ function combat.resolve(context, command)
         killer.experience = (killer.experience or 0) + gained
         experience[killer.id] = gained
         context.objects:set(killer.id, "experience", killer.experience)
+        if ability(killer, "feeding") and defeated.race ~= "undead"
+            and defeated.undead_variation ~= "null" then
+            killer.max_hitpoints = killer.max_hitpoints + 1
+            killer.hitpoints = math.min(killer.max_hitpoints, killer.hitpoints + 1)
+            context.objects:set(killer.id, "max_hitpoints", killer.max_hitpoints)
+            context.objects:set(killer.id, "hitpoints", killer.hitpoints)
+        end
     else
         local combat_experience = scenario(context).combat_experience or 1
         for _, pair in ipairs({{attacker, defender}, {defender, attacker}}) do
@@ -1514,12 +1828,39 @@ function combat.resolve(context, command)
         }
         if scripted then events[#events + 1] = scripted end
         context.objects:remove(defeated.id)
+        local killer_weapon = defeated.id == defender.id and attack or retaliation
+        local plague = killer_weapon and weapon_special(killer_weapon, "plague")
+        if plague and defeated.race ~= "undead" and defeated.undead_variation ~= "null"
+            and context.map:get(defeated.position) ~= "village" then
+            local unit_type = plague.type or "Walking Corpse"
+            local template = (context.state:get("unit_types") or {})[unit_type]
+            if template then
+                local number = context.state:get("next_recruit_id")
+                context.state:set("next_recruit_id", number + 1)
+                template.id = killer.side .. "_plague_" .. number
+                template.type = unit_type
+                template.side = killer.side
+                template.x, template.y = defeated.position.x, defeated.position.y
+                template.position = defeated.position
+                apply_traits(context, template)
+                template.hitpoints = template.max_hitpoints
+                template.movement_points = 0
+                template.attacks_left = 0
+                template.experience = 0
+                template.resting = false
+                context.objects:add(template)
+                events[#events + 1] = {
+                    type = "unit_plagued", unit = template.id, unit_type = unit_type,
+                    position = defeated.position, side = killer.side,
+                }
+            end
+        end
         local achievement = kill_achievement(context, defeated, killer)
         if achievement then events[#events + 1] = achievement end
         for _, event in ipairs(advancements) do events[#events + 1] = event end
         local ending = objective_event(context, defeated.id, killer.id)
         local current = phase(context)
-        if not ending and current then
+        if not ending and not context.state:get("pending_finish") and current then
             if current.when == "unit_defeated" and current.unit == defeated.id then
                 if current.result then
                     ending = finished(context, current.result, current.finish_dialog or current.dialog)
@@ -1544,9 +1885,9 @@ function combat.resolve(context, command)
     return result
 end
 
-local function in_enemy_zoc(context, object, position)
-    for _, enemy in ipairs(context.objects:all()) do
-        if not allied(context, enemy.side, object.side) and enemy.hitpoints > 0
+local function in_enemy_zoc(context, object, position, objects, allied_with_object)
+    for _, enemy in ipairs(objects) do
+        if not allied_with_object(enemy.side) and enemy.hitpoints > 0
             and not enemy.petrified and not enemy.stunned
             and (enemy.level or 0) > 0
             and context.map:are_adjacent(enemy.position, position) then
@@ -1567,14 +1908,31 @@ function combat.reachable(context, command)
     if object.petrified or object.stunned then return {} end
     local movement_points = command.inspect and object.max_moves or object.movement_points
 
+    -- Fetching objects crosses the Rust/Lua boundary and materializes every
+    -- unit. Keep one snapshot for the whole path search instead of doing that
+    -- once per visited hex through in_enemy_zoc.
+    local objects = context.objects:all()
     local occupied = {}
-    for _, other in ipairs(context.objects:all()) do
+    for _, other in ipairs(objects) do
         if other.id ~= object.id then
             occupied[position_key(other.position)] = other
         end
     end
 
     local start_key = position_key(object.position)
+    local teams = {}
+    local function team(side)
+        if teams[side] == nil then
+            teams[side] = side_team(context, side) or false
+        end
+        return teams[side]
+    end
+    local object_team = team(object.side)
+    local function allied_with_object(side)
+        return side == object.side or object_team and object_team == team(side)
+    end
+    local movement_costs = child(object, "movement_costs")
+    local ignores_zoc = ability(object, "skirmisher") ~= nil
     local best = { [start_key] = 0 }
     local finalized = {}
     local frontier = {{ position = object.position, cost = 0, path = {} }}
@@ -1591,8 +1949,9 @@ function combat.reachable(context, command)
         local current_key = position_key(current.position)
         if not finalized[current_key] then
             finalized[current_key] = true
-            current.zoc = not ability(object, "skirmisher") and current_key ~= start_key
-                and in_enemy_zoc(context, object, current.position)
+            current.zoc = not ignores_zoc and current_key ~= start_key
+                and in_enemy_zoc(context, object, current.position, objects,
+                    allied_with_object)
             if current_key ~= start_key and not occupied[current_key] then
                 result[#result + 1] = current
             end
@@ -1601,13 +1960,13 @@ function combat.reachable(context, command)
                 for _, destination in ipairs(context.map:neighbors(current.position)) do
                     local key = position_key(destination)
                     local terrain = context.map:get(destination)
-                    local step_cost = child(object, "movement_costs")[terrain]
+                    local step_cost = movement_costs[terrain]
                     local passable = step_cost and step_cost <= object.max_moves
                     local cost = passable and current.cost < movement_points
                         and math.min(movement_points, current.cost + step_cost)
                     local blocker = occupied[key]
                     if cost and cost <= movement_points
-                        and (not blocker or allied(context, blocker.side, object.side))
+                        and (not blocker or allied_with_object(blocker.side))
                         and not finalized[key] and (best[key] == nil or cost < best[key]) then
                         local path = {}
                         for index, position in ipairs(current.path) do
@@ -1629,11 +1988,11 @@ function combat.reachable(context, command)
     local start_village = village_at(context, object.position)
     if movement_points > 0 and ability(object, "teleport")
         and start_village and start_village.side
-        and allied(context, start_village.side, object.side) then
+        and allied_with_object(start_village.side) then
         for _, village in ipairs(context.state:get("villages") or {}) do
             local position = { x = village.x, y = village.y }
             local key = position_key(position)
-            if allied(context, village.side, object.side) and not occupied[key]
+            if allied_with_object(village.side) and not occupied[key]
                 and key ~= start_key and (best[key] == nil or best[key] > 1) then
                 for index = #result, 1, -1 do
                     if position_key(result[index].position) == key then
@@ -1729,6 +2088,7 @@ function combat.move(context, command)
         or object.movement_points - destination.cost
     context.objects:set(object.id, "movement_points", movement_points)
     update_shroud(context)
+    local sighted = sight_event(context, context.objects:get(object.id))
     local capture
     local villages = context.state:get("villages") or {}
     local village
@@ -1738,6 +2098,8 @@ function combat.move(context, command)
         end
     end
     if village and village.side ~= object.side then
+        movement_points = 0
+        context.objects:set(object.id, "movement_points", 0)
         village.side = object.side
         context.state:set("villages", villages)
         capture = {
@@ -1764,6 +2126,7 @@ function combat.move(context, command)
         local events = { event }
         if capture then events[#events + 1] = capture end
         if scripted then events[#events + 1] = scripted end
+        if sighted then events[#events + 1] = sighted end
         events[#events + 1] = objective_ending
         return events
     end
@@ -1775,6 +2138,7 @@ function combat.move(context, command)
         local events = { event }
         if capture then events[#events + 1] = capture end
         if scripted then events[#events + 1] = scripted end
+        if sighted then events[#events + 1] = sighted end
         if current.result then
             events[#events + 1] = finished(context, current.result,
                 current.finish_dialog or current.dialog)
@@ -1785,10 +2149,11 @@ function combat.move(context, command)
         end
         return events
     end
-    if capture or scripted then
+    if capture or scripted or sighted then
         local events = { event }
         if capture then events[#events + 1] = capture end
         if scripted then events[#events + 1] = scripted end
+        if sighted then events[#events + 1] = sighted end
         return events
     end
     return event
@@ -1823,6 +2188,18 @@ function combat.actions(context, command)
         targets = targets,
         attacks = attacks,
     }
+end
+
+function combat.move_with_actions(context, command)
+    local result = combat.move(context, command)
+    local events = result.type and { result } or result
+    if not context.state:get("finished") and not context.state:get("pending_choice")
+        and context.objects:get(command.object) then
+        local available = combat.actions(context, { object = command.object })
+        available.type = "available_actions"
+        events[#events + 1] = available
+    end
+    return events
 end
 
 return combat

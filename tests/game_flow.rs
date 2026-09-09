@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use wesnoth_engine::{engine::Position, game::Game, value::Value};
 
@@ -295,6 +292,11 @@ fn combat_awards_wesnoth_combat_experience() {
     let Value::List(experience) = battle.get("experience").unwrap() else {
         panic!("battle experience must be a list")
     };
+    let Some(Value::List(strikes)) = battle.get("strikes") else {
+        panic!("battle strikes must be a list")
+    };
+    assert!(strikes.len() > 1);
+    assert_eq!(experience.len(), 2);
     for gained in experience {
         assert_eq!(gained.get("gained"), Some(&Value::Integer(1)));
         assert_eq!(gained.get("total"), Some(&Value::Integer(1)));
@@ -631,7 +633,22 @@ fn reaching_the_experience_threshold_advances_the_unit() {
             Value::String("elvish_ranger".into()),
         ])
     );
-    game.acknowledge_dialog().unwrap();
+    let status = game.query("status", Value::Nil).unwrap();
+    assert_eq!(status.get("finished"), Some(&Value::Bool(false)));
+    let pending = status
+        .get("pending_advancement")
+        .and_then(Value::as_map)
+        .expect("status must describe the pending advancement");
+    let Some(Value::List(details)) = pending.get("details") else {
+        panic!("pending advancement must contain UI details")
+    };
+    assert_eq!(details.len(), 2);
+    assert_eq!(
+        details[0].get("id").and_then(Value::as_str),
+        Some("elvish_marksman")
+    );
+    assert_eq!(details[0].get("hitpoints"), details[0].get("max_hitpoints"));
+    assert!(matches!(details[0].get("attacks"), Some(Value::List(attacks)) if !attacks.is_empty()));
     assert!(
         game.execute(
             "advance",
@@ -651,7 +668,10 @@ fn reaching_the_experience_threshold_advances_the_unit() {
             ])),
         )
         .unwrap();
-    let advanced = &events[0];
+    let advanced = events
+        .iter()
+        .find(|event| event.get("type").and_then(Value::as_str) == Some("unit_advanced"))
+        .unwrap();
     assert_eq!(advanced.get("unit").and_then(Value::as_str), Some("alice"));
     assert_eq!(
         advanced.get("to").and_then(Value::as_str),
@@ -673,6 +693,26 @@ fn reaching_the_experience_threshold_advances_the_unit() {
     assert_eq!(alice.get("level"), Some(&Value::Integer(2)));
     assert_eq!(alice.get("hitpoints"), alice.get("max_hitpoints"));
     assert_eq!(alice.get("experience"), advanced.get("experience"));
+    assert!(
+        events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("scenario_finished")
+        })
+    );
+    assert_eq!(
+        game.query("status", Value::Nil).unwrap().get("finished"),
+        Some(&Value::Bool(true))
+    );
+    game.acknowledge_dialog().unwrap();
+    assert!(
+        game.execute(
+            "advance",
+            Value::Map(BTreeMap::from([
+                ("unit".into(), Value::String("alice".into())),
+                ("choice".into(), Value::String("elvish_marksman".into())),
+            ])),
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -690,8 +730,8 @@ fn movement_rejects_occupied_destination_and_spends_points() {
     game.acknowledge_dialog().unwrap();
     assert!(game.execute("move", movement(3, 2)).is_err());
     let events = game.execute("move", movement(1, 1)).unwrap();
-    assert_eq!(events[0].get("cost"), Some(&Value::Integer(2)));
-    assert_eq!(events[0].get("movement_points"), Some(&Value::Integer(4)));
+    assert_eq!(events[0].get("cost"), Some(&Value::Integer(1)));
+    assert_eq!(events[0].get("movement_points"), Some(&Value::Integer(5)));
 }
 
 #[test]
@@ -1035,7 +1075,7 @@ fn crossing_defeating_the_ambush_advances_even_off_the_bridge() {
     game.execute("move", move_object("kael", 5, 3)).unwrap();
     game.acknowledge_dialog().unwrap();
     game.execute("move", move_object("kael", 5, 2)).unwrap();
-    game.execute("move", move_object("lyra", 5, 4)).unwrap();
+    game.execute("move", move_object("lyra", 5, 3)).unwrap();
 
     let mut advanced = false;
     for _ in 0..8 {
@@ -1164,6 +1204,10 @@ fn outpost_village_capture_adds_income() {
         event.get("type").and_then(Value::as_str) == Some("village_captured")
             && event.get("side").and_then(Value::as_str) == Some("player")
     }));
+    assert!(events.iter().any(|event| {
+        event.get("type").and_then(Value::as_str) == Some("object_moved")
+            && event.get("movement_points") == Some(&Value::Integer(0))
+    }));
     let status = game.query("status", Value::Nil).unwrap();
     assert!(
         matches!(status.get("villages"), Some(Value::List(villages)) if villages.iter().any(|village| {
@@ -1192,7 +1236,7 @@ fn outpost_village_capture_adds_income() {
 }
 
 #[test]
-fn adapted_two_brothers_runs_story_milestones_and_turn_limit() {
+fn imported_two_brothers_uses_the_original_first_map_and_easy_settings() {
     let mut game = rooting_out_a_mage();
     assert_eq!(game.id, "01_rooting_out_a_mage");
     assert_eq!(game.dialog(&game.start_dialog).unwrap().len(), 5);
@@ -1212,62 +1256,31 @@ fn adapted_two_brothers_runs_story_milestones_and_turn_limit() {
             .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Mordak"))
     );
 
-    let mut scheduled = None;
-    for _ in 1..6 {
-        let events = game.execute("end_turn", Value::Nil).unwrap();
-        scheduled = scheduled.or_else(|| {
-            events
-                .into_iter()
-                .find(|event| event.get("type").and_then(Value::as_str) == Some("turn_event"))
-        });
-    }
-    let scheduled = scheduled.expect("turn six must fire its story event");
-    assert_eq!(
-        scheduled.get("id").and_then(Value::as_str),
-        Some("baran_ready")
+    let snapshot = game.snapshot().unwrap();
+    assert_eq!((snapshot.map.width, snapshot.map.height), (40, 32));
+    let status = game.query("status", Value::Nil).unwrap();
+    assert_eq!(status.get("turn_limit"), Some(&Value::Integer(18)));
+    assert!(
+        value_list_for_test(&status, "recruit_types")
+            .iter()
+            .any(|unit| unit.as_str() == Some("Horseman"))
     );
-    assert_eq!(scheduled.get("turn"), Some(&Value::Integer(6)));
-    game.acknowledge_dialog().unwrap();
-
-    let mut turn_ten = None;
-    for _ in 6..10 {
-        let events = game.execute("end_turn", Value::Nil).unwrap();
-        turn_ten = turn_ten.or_else(|| {
-            events
-                .into_iter()
-                .find(|event| event.get("id").and_then(Value::as_str) == Some("baran_missing"))
-        });
-    }
-    assert!(turn_ten.is_some());
-    game.acknowledge_dialog().unwrap();
-
-    let mut ending = None;
-    for _ in 10..19 {
-        let events = game.execute("end_turn", Value::Nil).unwrap();
-        ending = ending.or_else(|| {
-            events.into_iter().find(|event| {
-                event.get("type").and_then(Value::as_str) == Some("scenario_finished")
-            })
-        });
-    }
-    let ending = ending.expect("turn 19 must apply the 18-turn limit");
-    assert_eq!(ending.get("result").and_then(Value::as_str), Some("defeat"));
 }
 
 #[test]
 fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
     let mut first = rooting_out_a_mage();
     first.acknowledge_dialog().unwrap();
-    first.execute("recruit", recruit("spearman")).unwrap();
+    first.execute("recruit", recruit("Spearman")).unwrap();
     let state = first.campaign_state().unwrap();
     let veteran = state
         .units
         .iter()
-        .find(|unit| unit.get("id").and_then(Value::as_str) == Some("player_spearman_1"))
+        .find(|unit| unit.get("id").and_then(Value::as_str) == Some("player_Spearman_1"))
         .unwrap();
     assert_eq!(
         veteran.get("type").and_then(Value::as_str),
-        Some("spearman")
+        Some("Spearman")
     );
 
     let mut second = Game::load_with_campaign(
@@ -1277,18 +1290,14 @@ fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
     )
     .unwrap();
     second.acknowledge_dialog().unwrap();
+    let status = second.query("status", Value::Nil).unwrap();
+    let destination = value_list_for_test(&status, "recruit_hexes")[0].clone();
     let recalled = second
         .execute(
             "recall",
             Value::Map(BTreeMap::from([
-                ("unit".into(), Value::String("player_spearman_1".into())),
-                (
-                    "destination".into(),
-                    Value::Map(BTreeMap::from([
-                        ("x".into(), Value::Integer(2)),
-                        ("y".into(), Value::Integer(9)),
-                    ])),
-                ),
+                ("unit".into(), Value::String("player_Spearman_1".into())),
+                ("destination".into(), destination),
             ])),
         )
         .unwrap();
@@ -1302,12 +1311,12 @@ fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
     assert!(
         objects
             .iter()
-            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("player_spearman_1"))
+            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("player_Spearman_1"))
     );
 }
 
 #[test]
-fn adapted_chase_starts_with_hidden_kidnappers_in_reserve() {
+fn imported_chase_has_the_original_map_and_three_factions() {
     let game = the_chase();
     assert_eq!(game.id, "02_the_chase");
     let Value::List(objects) = game.snapshot().unwrap().objects else {
@@ -1319,94 +1328,55 @@ fn adapted_chase_starts_with_hidden_kidnappers_in_reserve() {
             .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Nil-Galion"))
     );
     assert!(
-        !objects
-            .iter()
-            .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Muff_Toras"))
-    );
-}
-
-#[test]
-fn chase_discovers_villages_from_map_terrain() {
-    let mut game = the_chase();
-    let status = game.query("status", Value::Nil).unwrap();
-    let villages = value_list_for_test(&status, "villages");
-    assert_eq!(villages.len(), 7);
-    assert!(villages.iter().any(|village| {
-        village.get("x") == Some(&Value::Integer(4))
-            && village.get("y") == Some(&Value::Integer(8))
-            && village.get("side").is_none()
-    }));
-    game.acknowledge_dialog().unwrap();
-    let events = game.execute("move", move_object("Arvith", 4, 8)).unwrap();
-    assert!(events.iter().any(|event| {
-        event.get("type").and_then(Value::as_str) == Some("village_captured")
-            && event.get("side").and_then(Value::as_str) == Some("player")
-    }));
-}
-
-#[test]
-fn reaching_the_north_of_the_woods_reveals_the_kidnappers() {
-    let mut game = the_chase();
-    game.acknowledge_dialog().unwrap();
-    let mut revealed = false;
-    for _ in 0..5 {
-        let actions = game
-            .query(
-                "actions",
-                Value::Map(BTreeMap::from([(
-                    "object".into(),
-                    Value::String("Arvith".into()),
-                )])),
-            )
-            .unwrap();
-        let Value::List(cells) = actions.get("reachable").unwrap() else {
-            panic!()
-        };
-        let destination = cells
-            .iter()
-            .min_by_key(|cell| {
-                let position = cell.get("position").unwrap();
-                (position.get("x").and_then(Value::as_i64).unwrap() - 6).abs()
-                    + (position.get("y").and_then(Value::as_i64).unwrap() - 2).abs()
-            })
-            .unwrap()
-            .get("position")
-            .unwrap()
-            .clone();
-        let events = game
-            .execute(
-                "move",
-                Value::Map(BTreeMap::from([
-                    ("object".into(), Value::String("Arvith".into())),
-                    ("destination".into(), destination),
-                ])),
-            )
-            .unwrap();
-        if events
-            .iter()
-            .any(|event| event.get("type").and_then(Value::as_str) == Some("phase_changed"))
-        {
-            revealed = true;
-            break;
-        }
-        game.execute("end_turn", Value::Nil).unwrap();
-    }
-    assert!(revealed);
-    let Value::List(objects) = game.snapshot().unwrap().objects else {
-        panic!()
-    };
-    assert!(
         objects
             .iter()
             .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Muff_Toras"))
     );
+    let snapshot = game.snapshot().unwrap();
+    assert_eq!((snapshot.map.width, snapshot.map.height), (21, 55));
+    let status = game.query("status", Value::Nil).unwrap();
+    assert_eq!(status.get("turn_limit"), Some(&Value::Integer(28)));
+}
+
+#[test]
+fn chase_discovers_villages_from_map_terrain() {
+    let game = the_chase();
+    let status = game.query("status", Value::Nil).unwrap();
+    let villages = value_list_for_test(&status, "villages");
+    assert_eq!(villages.len(), 17);
+    assert!(villages.iter().all(|village| village.get("side").is_none()));
+}
+
+#[test]
+fn chase_uses_upstream_unit_types_and_summons_are_reserved() {
+    let game = the_chase();
+    let Value::List(objects) = game.snapshot().unwrap().objects else {
+        panic!()
+    };
+    let unit_type = |id| {
+        objects
+            .iter()
+            .find(|unit| unit.get("id").and_then(Value::as_str) == Some(id))
+            .and_then(|unit| unit.get("type"))
+            .and_then(Value::as_str)
+    };
+    assert_eq!(unit_type("Nil-Galion"), Some("Elvish Rider"));
+    assert_eq!(unit_type("Muff_Toras"), Some("Dark Adept"));
+    assert_eq!(unit_type("summoned_skeleton_1"), None);
 }
 
 #[test]
 fn guarded_castle_opens_with_the_password_route() {
     let mut game = guarded_castle();
+    assert_eq!(
+        (
+            game.snapshot().unwrap().map.width,
+            game.snapshot().unwrap().map.height
+        ),
+        (39, 33)
+    );
     game.acknowledge_dialog().unwrap();
-    let events = game.execute("move", move_object("Arvith", 6, 6)).unwrap();
+    let events = game.execute("move", move_object("Arvith", 33, 29)).unwrap();
     assert!(
         events
             .iter()
@@ -1432,10 +1402,12 @@ fn guarded_castle_opens_with_the_password_route() {
 }
 
 #[test]
-fn guarded_castle_passwords_trap_and_guard_shift_are_scenario_rules() {
+fn guarded_castle_rejects_a_wrong_first_password() {
     let mut wrong = guarded_castle();
     wrong.acknowledge_dialog().unwrap();
-    wrong.execute("move", move_object("Arvith", 6, 6)).unwrap();
+    wrong
+        .execute("move", move_object("Arvith", 33, 29))
+        .unwrap();
     wrong.acknowledge_dialog().unwrap();
     let events = wrong
         .execute("choose", choose("first_password", "Eleben"))
@@ -1449,60 +1421,12 @@ fn guarded_castle_passwords_trap_and_guard_shift_are_scenario_rules() {
             .iter()
             .any(|unit| unit.get("id").and_then(Value::as_str) == Some("Guard_leader"))
     );
-
-    let mut game = guarded_castle();
-    game.acknowledge_dialog().unwrap();
-    game.execute("move", move_object("Arvith", 6, 6)).unwrap();
-    game.acknowledge_dialog().unwrap();
-    game.execute("choose", choose("first_password", "Sithrak"))
-        .unwrap();
-    game.acknowledge_dialog().unwrap();
-    let events = game.execute("move", move_object("Arvith", 5, 5)).unwrap();
-    let treasure = events
-        .iter()
-        .find(|event| event.get("id").and_then(Value::as_str) == Some("treasury"))
-        .expect("the treasury must grant its gold once");
-    assert_eq!(treasure.get("amount"), Some(&Value::Integer(50)));
-    assert_eq!(
-        treasure.get("achievement").and_then(Value::as_str),
-        Some("treasure")
-    );
-    assert_eq!(
-        game.campaign_state()
-            .unwrap()
-            .variables
-            .get("campaign:achievement:treasure"),
-        Some(&Value::Bool(true))
-    );
-    game.acknowledge_dialog().unwrap();
-    game.execute("end_turn", Value::Nil).unwrap();
-    let events = game.execute("move", move_object("Arvith", 4, 5)).unwrap();
-    let trap = events
-        .iter()
-        .find(|event| event.get("id").and_then(Value::as_str) == Some("evil_altar"))
-        .expect("the altar must trigger once");
-    assert_eq!(trap.get("damage"), Some(&Value::Integer(8)));
-    assert_eq!(trap.get("status").and_then(Value::as_str), Some("poisoned"));
-    game.acknowledge_dialog().unwrap();
-
-    let events = game.execute("end_turn", Value::Nil).unwrap();
-    assert!(events.iter().any(|event| {
-        event.get("type").and_then(Value::as_str) == Some("choice_required")
-            && event.get("choice").and_then(Value::as_str) == Some("second_password")
-    }));
-    game.acknowledge_dialog().unwrap();
-    let events = game
-        .execute("choose", choose("second_password", "Akranbral"))
-        .unwrap();
-    assert_eq!(events[0].get("correct"), Some(&Value::Bool(true)));
-    assert!(matches!(events[0].get("removed"), Some(Value::List(units)) if units.len() == 2));
 }
 
 #[test]
 fn campaign_state_survives_the_whole_campaign() {
     let mut first = rooting_out_a_mage();
     first.acknowledge_dialog().unwrap();
-    first.execute("recruit", recruit("spearman")).unwrap();
     let first_state = first.campaign_state().unwrap();
 
     let second = Game::load_with_campaign(
@@ -1542,11 +1466,7 @@ fn campaign_state_survives_the_whole_campaign() {
     );
     let status = fourth.query("status", Value::Nil).unwrap();
     let recall = value_list_for_test(&status, "recall_units");
-    assert!(
-        recall
-            .iter()
-            .any(|unit| unit.as_str() == Some("player_spearman_1"))
-    );
+    assert!(recall.iter().any(|unit| unit.as_str() == Some("Alwyn")));
 }
 
 #[test]
@@ -1564,58 +1484,14 @@ fn return_to_the_village_opens_with_both_brothers_and_no_next_chapter() {
         );
     }
     let status = game.query("status", Value::Nil).unwrap();
-    assert_eq!(
-        status.get("phase").and_then(Value::as_str),
-        Some("find_hoban")
-    );
+    let snapshot = game.snapshot().unwrap();
+    assert_eq!((snapshot.map.width, snapshot.map.height), (28, 33));
+    assert_eq!(status.get("turn_limit"), Some(&Value::Integer(26)));
     assert_eq!(game.next_scenario(), None);
     assert!(matches!(status.get("fog"), Some(Value::Bool(true))));
     let visible = value_list_for_test(&status, "visible_units");
-    assert!(
-        visible
-            .iter()
-            .any(|unit| unit.as_str() == Some("village_guard"))
-    );
+    assert!(visible.iter().any(|unit| unit.as_str() == Some("Arvith")));
     assert!(!visible.iter().any(|unit| unit.as_str() == Some("Tairach")));
-
-    let initially_visible: BTreeSet<_> = value_list_for_test(&status, "visible_cells")
-        .iter()
-        .map(|cell| {
-            (
-                cell.get("x").and_then(Value::as_i64).unwrap(),
-                cell.get("y").and_then(Value::as_i64).unwrap(),
-            )
-        })
-        .collect();
-    game.execute("move", move_object("Arvith", 7, 7)).unwrap();
-    game.execute("move", move_object("Baran", 7, 8)).unwrap();
-    let moved_status = game.query("status", Value::Nil).unwrap();
-    let positions = |key| {
-        value_list_for_test(&moved_status, key)
-            .iter()
-            .map(|cell| {
-                (
-                    cell.get("x").and_then(Value::as_i64).unwrap(),
-                    cell.get("y").and_then(Value::as_i64).unwrap(),
-                )
-            })
-            .collect::<BTreeSet<_>>()
-    };
-    let currently_visible = positions("visible_cells");
-    let revealed = positions("revealed_cells");
-    let remembered = initially_visible
-        .difference(&currently_visible)
-        .next()
-        .expect("moving north must leave a southern cell behind");
-    assert!(revealed.contains(remembered));
-
-    let error = game
-        .execute("resolve", attack_units("Arvith", "village_guard", "sword"))
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("cannot attack an allied unit"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -1730,7 +1606,7 @@ fn forest_ambush_hides_until_an_enemy_moves_adjacent() {
             .any(|unit| unit.as_str() == Some("ambusher"))
     );
 
-    let events = game.execute("move", move_object("walker", 2, 1)).unwrap();
+    let events = game.execute("move", move_object("walker", 3, 3)).unwrap();
     assert_eq!(events[0].get("stopped_by_zoc"), Some(&Value::Bool(true)));
     let status = game.query("status", Value::Nil).unwrap();
     assert!(
@@ -1744,6 +1620,50 @@ fn forest_ambush_hides_until_an_enemy_moves_adjacent() {
             .iter()
             .any(|target| target.as_str() == Some("ambusher"))
     );
+}
+
+#[test]
+fn loads_generated_core_unit_catalog_across_races() {
+    let game = Game::load(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
+        "scenarios/core_units_test.wml",
+    )
+    .unwrap();
+    let Value::List(objects) = game.snapshot().unwrap().objects else {
+        panic!("snapshot objects must be a list")
+    };
+    assert_eq!(objects.len(), 6);
+    for (id, race) in [
+        ("elf", "elf"),
+        ("drake", "drake"),
+        ("mermaid", "merman"),
+        ("orc", "orc"),
+        ("lich", "undead"),
+        ("dunefolk", "dunefolk"),
+    ] {
+        let unit = objects
+            .iter()
+            .find(|unit| unit.get("id").and_then(Value::as_str) == Some(id))
+            .unwrap();
+        assert_eq!(unit.get("race").and_then(Value::as_str), Some(race));
+        assert!(unit.get("image").and_then(Value::as_str).is_some());
+        assert!(matches!(unit.get("attacks"), Some(Value::List(attacks)) if !attacks.is_empty()));
+        let Some(Value::List(traits)) = unit.get("traits") else {
+            panic!("unit traits must be a list")
+        };
+        assert_eq!(traits.len(), if id == "lich" { 1 } else { 2 });
+    }
+    let lich = objects
+        .iter()
+        .find(|unit| unit.get("id").and_then(Value::as_str) == Some("lich"))
+        .unwrap();
+    let Some(Value::List(attacks)) = lich.get("attacks") else {
+        panic!("lich attacks must be a list")
+    };
+    assert!(attacks.iter().any(|attack| {
+        matches!(attack.get("specials"), Some(Value::List(specials))
+            if specials.iter().any(|special| special.as_str() == Some("magical")))
+    }));
 }
 
 fn value_list_for_test<'a>(value: &'a Value, key: &str) -> &'a [Value] {

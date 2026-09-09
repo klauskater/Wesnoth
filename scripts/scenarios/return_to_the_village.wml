@@ -1,7 +1,7 @@
 [scenario]
     id=04_return_to_the_village
     name="Возвращение в деревню"
-    objective="Найдите старосту Хобана"
+    objective="Узнайте, что происходит в Магре, и освободите деревню"
     campaign_side=player
     carryover_percentage=0
     recall_cost=20
@@ -10,12 +10,12 @@
     village_income=2
     village_support=1
     village_heal=8
-    vision_radius=2
+    vision_radius=8
 
     [resources]
         map=maps/return_to_the_village.wml
-        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
-        unit_types=units/knight.wml,units/spearman.wml,units/bowman.wml,units/red_mage.wml,units/orcish_grunt.wml,units/orcish_warrior.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/core-1.18.8.wml
         dialogs=dialogs/return_to_the_village.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
     [/resources]
@@ -26,98 +26,82 @@
         controller=human
         team_name=good
         fog=yes
-        shroud=yes
-        gold=120
-        recruit=spearman,bowman
+        gold=140
+        recruit=Horseman,Bowman,Spearman,Footpad
     [/side]
     [side]
         id=enemy
         controller=ai
         team_name=evil
         defeat_condition=no_leader_left
-        gold=100
-        recruit=orcish_grunt
+        gold=150
+        income=10
+        recruit=Goblin Spearman,Wolf Rider,Orcish Archer,Orcish Grunt,Troll Whelp
     [/side]
     [side]
         id=allies
         controller=ai
         team_name=good
-        gold=0
+        gold=60
+        income=4
+        recruit=Bowman,Spearman
     [/side]
 
     [unit]
         id=Arvith
         name="Арвит"
-        type=knight
+        type=Knight
         side=player
         is_leader=yes
-        x=3
-        y=9
+        x=4
+        y=28
     [/unit]
     [unit]
         id=Baran
         name="Баран"
-        type=red_mage
+        type=Red Mage
         side=player
-        x=4
-        y=9
+        x=5
+        y=28
         upkeep=loyal
-    [/unit]
-    [unit]
-        id=Reeve_Hoban
-        name="Староста Хобан"
-        type=bowman
-        side=allies
-        x=9
-        y=3
-        upkeep=loyal
-    [/unit]
-    [unit]
-        id=village_guard
-        name="Защитник Магре"
-        type=spearman
-        side=allies
-        x=8
-        y=4
     [/unit]
     [unit]
         id=Tairach
         name="Тарайх"
-        type=orcish_warrior
+        type=Orcish Warlord
         side=enemy
         is_leader=yes
-        x=12
+        x=25
+        y=14
+    [/unit]
+    [unit]
+        id=Reeve_Hoban
+        name="Староста Хобан"
+        type=Longbowman
+        side=allies
+        is_leader=yes
+        x=13
         y=3
     [/unit]
-    [unit]
-        id=orc_raider_one
-        type=orcish_grunt
-        side=enemy
-        x=10
-        y=5
-    [/unit]
-    [unit]
-        id=orc_raider_two
-        type=orcish_grunt
-        side=enemy
-        x=12
-        y=6
-    [/unit]
 
-    [phase]
-        id=find_hoban
-        label="Доберитесь до старосты Хобана"
-        when=unit_reaches
-        unit=Arvith
-        x=9
-        y=4
-        next=defeat_tairach
-    [/phase]
-
+    [sight_event]
+        id=village_defenders_found
+        viewer_side=player
+        target=Reeve_Hoban
+        dialog=village_besieged
+    [/sight_event]
     [attack_event]
-        id=baran_faces_tairach
+        id=baran_attacks_tairach
+        group=baran_tairach
         attacker=Baran
         defender=Tairach
+        dialog=baran_faces_tairach
+    [/attack_event]
+    [attack_event]
+        id=tairach_attacks_baran
+        group=baran_tairach
+        attacker=Tairach
+        defender=Baran
         dialog=baran_faces_tairach
     [/attack_event]
     [achievement]
@@ -126,13 +110,6 @@
         unit=Tairach
         killer=Baran
     [/achievement]
-    [phase]
-        id=defeat_tairach
-        label="Убейте Тарайха и освободите Магре"
-        dialog=village_besieged
-        when=unit_defeated
-        unit=Tairach
-    [/phase]
 
     [objective]
         result=victory
@@ -155,7 +132,7 @@
     [objective]
         result=defeat
         when=turn_limit
-        turn=24
+        turn=26
         dialog=village_defeat
     [/objective]
 [/scenario]

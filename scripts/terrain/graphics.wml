@@ -1,5 +1,21 @@
-# Compact, pre-normalization-friendly terrain rules used by the port.
-# @R0 is expanded to n,ne,se,s,sw,nw when rotations=6.
+# Компактные правила графики террейна для порта.
+#
+# Это намеренно не полный оригинальный terrain-graphics WML. Файл читает
+# `src/terrain_rules.rs`, поэтому здесь поддерживаются только [terrain_rule],
+# [constraint] и [image]. Макросы и стандартный препроцессор Wesnoth сюда
+# напрямую переносить нельзя.
+#
+# Формат одного правила:
+# - первый constraint без q/r проверяет гекс-якорь;
+# - остальные constraint проверяют соседей в аксиальных смещениях q/r;
+# - terrain — разрешённые коды, exclude — исключения (поддерживается `*`);
+# - set_flags/forbid_flags не дают более поздним правилам повторно занять грань;
+# - image.name — логическое имя, которое затем переводится в PNG в client.rs;
+# - меньший layer рисуется раньше и лежит ниже.
+#
+# rotations=6 размножает правило на шесть направлений. @R0 превращается в
+# n,ne,se,s,sw,nw; @R1 означает следующую сторону по часовой стрелке. Если
+# используются нестандартные имена спрайтов, их задаёт rotation_names.
 
 [terrain_rule]
     id=base-grass-green
@@ -13,61 +29,6 @@
 [/terrain_rule]
 
 [terrain_rule]
-    id=base-castle
-    [constraint]
-        terrain=Ce
-    [/constraint]
-    [image]
-        name=dirt
-        layer=-1000
-    [/image]
-[/terrain_rule]
-
-[terrain_rule]
-    id=base-keep
-    [constraint]
-        terrain=Ke
-    [/constraint]
-    [image]
-        name=dirt
-        layer=-1000
-    [/image]
-[/terrain_rule]
-
-# One convex wall corner: castle at the anchor, open ground to N and NE.
-[terrain_rule]
-    id=encampment-wall-convex
-    rotations=6
-    rotation_names=tr,r,br,bl,l,tl
-    [constraint]
-        terrain=Ce,Ke
-        forbid_flags=castlewall-@R0
-        set_flags=castlewall-@R0
-    [/constraint]
-    [constraint]
-        q=0
-        r=-1
-        terrain=*
-        exclude=C*,K*
-        forbid_flags=castlewall-@R2
-        set_flags=castlewall-@R2
-    [/constraint]
-    [constraint]
-        q=1
-        r=-1
-        terrain=*
-        exclude=C*,K*
-        forbid_flags=castlewall-@R4
-        set_flags=castlewall-@R4
-    [/constraint]
-    [image]
-        name=encampment-convex-@R0
-        layer=20
-        base=54,72
-    [/image]
-[/terrain_rule]
-
-[terrain_rule]
     id=bridge-wood-n-s
     [constraint]
         terrain=*^Bw|*
@@ -77,6 +38,12 @@
         layer=-10
     [/image]
 [/terrain_rule]
+
+# Это прежнее прямолинейное описание оставлено как справочник для формата
+# компактных правил. Деревянные Bw-мосты из него больше не попадают в кадр:
+# `wood_bridge_visuals` в terrain.rs сначала строит связи между соседними
+# гексами (аналог TRACK_AWAY/TRACK_FINAL оригинала), а затем выбирает прямой
+# или угловой PNG. Один символ `/`, `|` или `\` недостаточен для такого выбора.
 
 [terrain_rule]
     id=bridge-wood-ne-sw
@@ -133,8 +100,9 @@
     [/image]
 [/terrain_rule]
 
-# Water-facing bridge ends use dock pieces. These rules run before the land
-# ramps and claim only the matching end of the bridge.
+# Окончания в воде используют оригинальные wood-dock-*. Эти правила обязаны
+# идти раньше сухопутных рамп и выставляют bridge-end-направление. Иначе одно
+# и то же место получит сразу два окончания.
 [terrain_rule]
     id=bridge-wood-dock-n-s
     rotation_turns=0,3
@@ -197,8 +165,8 @@
     [/image]
 [/terrain_rule]
 
-# Land-facing bridge ends use ramps. Each compact rule covers the two
-# opposite ends of one axis.
+# На границе с сушей используются wood-end-*. Одно компактное правило
+# обрабатывает две противоположные стороны оси через rotation_turns=0,3.
 [terrain_rule]
     id=bridge-wood-end-n-s
     rotation_turns=0,3

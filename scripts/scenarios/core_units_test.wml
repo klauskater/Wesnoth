@@ -1,0 +1,66 @@
+[scenario]
+    id=core_units_test
+    name="Core unit catalog test"
+    random_seed=1188
+
+    [resources]
+        map=maps/outpost_defense.wml
+        map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        unit_types=units/core-1.18.8.wml
+        dialogs=dialogs/first_battle.wml
+        rules=rules/basic_combat.lua
+    [/resources]
+    on_start_dialog=first_battle_intro
+
+    [side]
+        id=player
+        controller=human
+    [/side]
+    [side]
+        id=enemy
+        controller=ai
+    [/side]
+
+    [unit]
+        id=elf
+        type="Elvish Fighter"
+        side=player
+        x=2
+        y=2
+    [/unit]
+    [unit]
+        id=drake
+        type="Drake Burner"
+        side=player
+        x=3
+        y=2
+    [/unit]
+    [unit]
+        id=mermaid
+        type="Mermaid Initiate"
+        side=player
+        x=4
+        y=2
+    [/unit]
+    [unit]
+        id=orc
+        type="Orcish Grunt"
+        side=enemy
+        x=6
+        y=2
+    [/unit]
+    [unit]
+        id=lich
+        type="Ancient Lich"
+        side=enemy
+        x=7
+        y=2
+    [/unit]
+    [unit]
+        id=dunefolk
+        type="Dune Burner"
+        side=enemy
+        x=8
+        y=2
+    [/unit]
+[/scenario]

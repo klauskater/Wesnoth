@@ -14,7 +14,7 @@
     [resources]
         map=maps/rooting_out_a_mage.wml
         map_objects=map_objects/grassland.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
-        unit_types=units/knight.wml,units/spearman.wml,units/bowman.wml,units/dark_sorcerer.wml,units/walking_corpse.wml
+        unit_types=units/core-1.18.8.wml
         dialogs=dialogs/rooting_out_a_mage.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
     [/resources]
@@ -24,20 +24,21 @@
     [side]
         id=player
         controller=human
-        gold=25
-        recruit=spearman,bowman
+        gold=40
+        recruit=Horseman,Bowman,Spearman,Footpad
     [/side]
     [side]
         id=enemy
         controller=ai
         passive_leader=yes
-        gold=0
+        gold=120
+        recruit=Walking Corpse,Vampire Bat,Dark Adept,Ghoul
     [/side]
 
     [unit]
         id=Arvith
         name="Арвит"
-        type=knight
+        type=Knight
         side=player
         is_leader=yes
         x=33
@@ -46,7 +47,7 @@
     [unit]
         id=Alwyn
         name="Алвин"
-        type=spearman
+        type=Spearman
         side=player
         x=30
         y=22
@@ -55,7 +56,7 @@
     [unit]
         id=Brent
         name="Брент"
-        type=spearman
+        type=Spearman
         side=player
         x=30
         y=21
@@ -64,7 +65,7 @@
     [unit]
         id=Efran
         name="Эфран"
-        type=bowman
+        type=Bowman
         side=player
         x=33
         y=19
@@ -74,7 +75,7 @@
     [unit]
         id=Mordak
         name="Мордак"
-        type=dark_sorcerer
+        type=Dark Sorcerer
         side=enemy
         is_leader=yes
         x=10
@@ -82,14 +83,14 @@
     [/unit]
     [unit]
         id=thrall_one
-        type=walking_corpse
+        type=Walking Corpse
         side=enemy
         x=9
         y=6
     [/unit]
     [unit]
         id=thrall_two
-        type=walking_corpse
+        type=Walking Corpse
         side=enemy
         x=11
         y=5

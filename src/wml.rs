@@ -43,6 +43,7 @@ pub fn parse(input: &str) -> Result<Vec<Node>, String> {
         }
 
         if let Some(name) = line.strip_prefix("[/").and_then(|v| v.strip_suffix(']')) {
+            validate_name(name, "tag", line_number)?;
             let node = stack
                 .pop()
                 .ok_or_else(|| format!("line {line_number}: unexpected closing tag [{line}]"))?;
@@ -61,6 +62,7 @@ pub fn parse(input: &str) -> Result<Vec<Node>, String> {
         }
 
         if let Some(name) = line.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+            validate_name(name, "tag", line_number)?;
             stack.push(Node {
                 name: name.to_owned(),
                 attributes: BTreeMap::new(),
@@ -75,6 +77,8 @@ pub fn parse(input: &str) -> Result<Vec<Node>, String> {
         let current = stack
             .last_mut()
             .ok_or_else(|| format!("line {line_number}: attribute outside a tag"))?;
+        let key = key.trim();
+        validate_name(key, "attribute", line_number)?;
         let mut value = raw_value.trim().to_owned();
 
         if value == "<<" {
@@ -94,11 +98,7 @@ pub fn parse(input: &str) -> Result<Vec<Node>, String> {
             value = value[1..value.len() - 1].to_owned();
         }
 
-        if current
-            .attributes
-            .insert(key.trim().to_owned(), value)
-            .is_some()
-        {
+        if current.attributes.insert(key.to_owned(), value).is_some() {
             return Err(format!("line {line_number}: duplicate attribute {key}"));
         }
     }
@@ -107,6 +107,18 @@ pub fn parse(input: &str) -> Result<Vec<Node>, String> {
         return Err(format!("unclosed tag [{}]", node.name));
     }
     Ok(roots)
+}
+
+fn validate_name(name: &str, kind: &str, line: usize) -> Result<(), String> {
+    if name.is_empty()
+        || name.trim() != name
+        || name
+            .chars()
+            .any(|character| character.is_whitespace() || matches!(character, '[' | ']' | '='))
+    {
+        return Err(format!("line {line}: invalid {kind} name: {name:?}"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -123,5 +135,19 @@ mod tests {
     #[test]
     fn rejects_mismatched_tags() {
         assert!(parse("[a]\n[/b]").unwrap_err().contains("expected closing"));
+    }
+
+    #[test]
+    fn rejects_malformed_structure() {
+        for source in [
+            "[]\n[/]",
+            "[a]\n=x\n[/a]",
+            "key=value",
+            "[a]\nvalue=<<\nmissing end\n[/a]",
+            "[a]\nkey=one\nkey=two\n[/a]",
+            "[a]",
+        ] {
+            assert!(parse(source).is_err(), "must reject {source:?}");
+        }
     }
 }

@@ -37,6 +37,7 @@ pub struct Game {
     dialogs: BTreeMap<String, Vec<DialogLine>>,
     pending_dialog: Option<String>,
     scenario_path: String,
+    revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,10 +63,19 @@ impl Game {
         scenario_path: &str,
         campaign: Option<&CampaignState>,
     ) -> Result<Self, String> {
-        let scripts = scripts.as_ref();
+        let scripts = fs::canonicalize(scripts.as_ref())
+            .map_err(|error| format!("cannot open scripts directory: {error}"))?;
         Self::load_with_campaign_from(scenario_path, campaign, &|path| {
-            fs::read_to_string(scripts.join(path))
-                .map_err(|error| format!("cannot read {path}: {error}"))
+            let requested = Path::new(path);
+            if requested.is_absolute() {
+                return Err(format!("resource path must be relative: {path}"));
+            }
+            let full = fs::canonicalize(scripts.join(requested))
+                .map_err(|error| format!("cannot read {path}: {error}"))?;
+            if !full.starts_with(&scripts) {
+                return Err(format!("resource path escapes scripts directory: {path}"));
+            }
+            fs::read_to_string(full).map_err(|error| format!("cannot read {path}: {error}"))
         })
     }
 
@@ -105,15 +115,34 @@ impl Game {
         }
 
         let mut types = BTreeMap::new();
+        let mut races = BTreeMap::new();
+        let mut traits = BTreeMap::new();
         for path in split_paths(resources.attribute("unit_types")?) {
             let roots = read_wml_from(path, read)?;
-            let unit_type = one_root(&roots, "unit_type")?;
-            let id = unit_type.attribute("id")?.to_owned();
-            if types
-                .insert(id.clone(), node_properties(unit_type))
-                .is_some()
-            {
-                return Err(format!("duplicate unit type id: {id}"));
+            for root in &roots {
+                let id = root.attribute("id")?.to_owned();
+                match root.name.as_str() {
+                    "unit_type" => {
+                        if types.insert(id.clone(), node_properties(root)).is_some() {
+                            return Err(format!("duplicate unit type id: {id}"));
+                        }
+                    }
+                    "race" => {
+                        if races.insert(id.clone(), node_properties(root)).is_some() {
+                            return Err(format!("duplicate race id: {id}"));
+                        }
+                    }
+                    "trait" => {
+                        if traits.insert(id.clone(), node_properties(root)).is_some() {
+                            return Err(format!("duplicate global trait id: {id}"));
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "unsupported [{other}] in unit type resource: {path}"
+                        ));
+                    }
+                }
             }
         }
 
@@ -166,6 +195,18 @@ impl Game {
                 .map(|(id, properties)| (id.clone(), Value::Map(properties.clone())))
                 .collect(),
         );
+        let races = Value::Map(
+            races
+                .into_iter()
+                .map(|(id, properties)| (id, Value::Map(properties)))
+                .collect(),
+        );
+        let traits = Value::Map(
+            traits
+                .into_iter()
+                .map(|(id, properties)| (id, Value::Map(properties)))
+                .collect(),
+        );
         let recall = campaign.map_or_else(Vec::new, |state| {
             state
                 .units
@@ -192,6 +233,8 @@ impl Game {
         let mut initial_state = BTreeMap::from([
             ("scenario".into(), Value::Map(node_properties(scenario))),
             ("unit_types".into(), unit_types),
+            ("races".into(), races),
+            ("traits".into(), traits),
             ("recall".into(), Value::List(recall)),
             ("villages".into(), Value::List(villages)),
         ]);
@@ -206,7 +249,7 @@ impl Game {
             },
             seed,
             rule_source,
-        );
+        )?;
         engine.execute("initialize", Value::Nil)?;
         if let (Some(campaign), Some(side)) = (campaign, scenario.attributes.get("campaign_side")) {
             let key = format!("gold:{side}");
@@ -230,6 +273,7 @@ impl Game {
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
             scenario_path: scenario_path.into(),
+            revision: 0,
         })
     }
 
@@ -259,6 +303,7 @@ impl Game {
         game.engine
             .restore_state(saved.objects, saved.state, saved.random_state);
         game.pending_dialog = saved.pending_dialog;
+        game.validate_restored_state()?;
         Ok(game)
     }
 
@@ -278,11 +323,18 @@ impl Game {
         game.engine
             .restore_state(saved.objects, saved.state, saved.random_state);
         game.pending_dialog = saved.pending_dialog;
+        game.validate_restored_state()?;
         Ok(game)
     }
 
     pub fn campaign_state(&self) -> Result<CampaignState, String> {
-        let scenario = self.engine.world.state["scenario"].as_map().unwrap();
+        let scenario = self
+            .engine
+            .world
+            .state
+            .get("scenario")
+            .and_then(Value::as_map)
+            .ok_or_else(|| "game state has no valid scenario".to_owned())?;
         let side = scenario
             .get("campaign_side")
             .and_then(Value::as_str)
@@ -355,8 +407,7 @@ impl Game {
     }
 
     pub fn snapshot(&self) -> Result<GameSnapshot, String> {
-        let mut engine = self.engine.clone();
-        let objects = engine.execute("snapshot", Value::Nil)?;
+        let objects = self.engine.query("snapshot", Value::Nil)?;
         Ok(GameSnapshot {
             map: self.engine.world.map.clone(),
             objects,
@@ -364,8 +415,11 @@ impl Game {
     }
 
     pub fn query(&self, function: &str, command: Value) -> Result<Value, String> {
-        let mut engine = self.engine.clone();
-        engine.execute(function, command)
+        self.engine.query(function, command)
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn acknowledge_dialog(&mut self) -> Result<(), String> {
@@ -380,6 +434,7 @@ impl Game {
             return Err(format!("dialog {dialog} is waiting for the UI"));
         }
         let result = self.engine.execute(function, command)?;
+        self.revision = self.revision.wrapping_add(1);
         let mut events = match result {
             Value::List(events) => events,
             event => vec![event],
@@ -413,6 +468,14 @@ impl Game {
             ("lines".into(), Value::List(lines)),
         ])))
     }
+
+    fn validate_restored_state(&self) -> Result<(), String> {
+        self.query("status", Value::Nil)
+            .map_err(|error| format!("invalid save state: {error}"))?;
+        self.start_events()
+            .map_err(|error| format!("invalid save dialog: {error}"))?;
+        Ok(())
+    }
 }
 
 fn read_wml_from(
@@ -444,9 +507,19 @@ fn parse_i64(node: &Node, name: &str) -> Result<i64, String> {
         .map_err(|_| format!("[{}].{name} must be an integer", node.name))
 }
 
-fn load_map(node: &Node) -> Result<Map, String> {
-    let width = parse_i64(node, "width")? as usize;
-    let height = parse_i64(node, "height")? as usize;
+/// Собирает игровую карту из WML-узла `[map]`.
+///
+/// Функция публична, чтобы отладочные инструменты читали карту точно так же,
+/// как игра, не заводя второй парсер формата `data=<<...>>`.
+pub fn load_map(node: &Node) -> Result<Map, String> {
+    let width = usize::try_from(parse_i64(node, "width")?)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "[map].width must be a positive integer".to_owned())?;
+    let height = usize::try_from(parse_i64(node, "height")?)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "[map].height must be a positive integer".to_owned())?;
     let rows: Vec<Vec<String>> = node
         .attribute("data")?
         .lines()
@@ -532,6 +605,15 @@ mod tests {
         let game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
         assert_eq!(game.snapshot().unwrap().map.cells.len(), 48);
         assert_eq!(game.dialog(&game.start_dialog).unwrap().len(), 2);
+        assert_eq!(game.revision(), 0);
+    }
+
+    #[test]
+    fn successful_commands_advance_the_ui_revision() {
+        let mut game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
+        game.acknowledge_dialog().unwrap();
+        game.execute("end_turn", Value::Nil).unwrap();
+        assert_eq!(game.revision(), 1);
     }
 
     #[test]
@@ -545,5 +627,30 @@ mod tests {
         assert_eq!(properties["label"], Value::String("custom".into()));
         let children = properties["__children"].as_map().unwrap();
         assert!(matches!(&children["extra"], Value::List(values) if values.len() == 2));
+    }
+
+    #[test]
+    fn rejects_invalid_map_dimensions() {
+        for dimensions in ["width=0\nheight=1", "width=1\nheight=-1"] {
+            let source = format!("[map]\n{dimensions}\ndata=<<\ngrassland\n>>\n[/map]");
+            let nodes = wml::parse(&source).unwrap();
+            assert!(load_map(&nodes[0]).is_err());
+        }
+    }
+
+    #[test]
+    fn filesystem_loader_rejects_paths_outside_scripts() {
+        let error = Game::load(scripts(), "../Cargo.toml").err().unwrap();
+        assert!(error.contains("escapes scripts directory"));
+    }
+
+    #[test]
+    fn load_save_rejects_invalid_restored_state() {
+        let game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
+        let mut save: serde_json::Value = serde_json::from_str(&game.save().unwrap()).unwrap();
+        save["state"].as_object_mut().unwrap().remove("scenario");
+        let source = serde_json::to_string(&save).unwrap();
+        let error = Game::load_save(scripts(), &source).err().unwrap();
+        assert!(error.contains("invalid save state"));
     }
 }
