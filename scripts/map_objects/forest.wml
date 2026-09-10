@@ -1,4 +1,6 @@
 [map_object]
     id=forest
+    codes=forest,Fp,Fds,Fdw,Fms,Fmw,Fet
     color=315f3c
+    renderer=terrain/forest.lua
 [/map_object]

@@ -1,0 +1,6 @@
+[map_object]
+    id=road
+    codes=Rd,Rr,Rp
+    color=77736a
+    renderer=terrain/road.lua
+[/map_object]

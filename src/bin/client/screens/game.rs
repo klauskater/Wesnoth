@@ -13,7 +13,7 @@ pub enum Action {
 }
 
 pub struct GameScreen {
-    game: Game,
+    _game: Game,
     map: MapRenderer,
     viewport: MapViewport,
     sprites: SpriteRenderer,
@@ -25,11 +25,14 @@ impl GameScreen {
         let map = MapRenderer::new(game.map(), game.map_tiles());
         let (min, max) = map.bounds();
         let viewport = MapViewport::new(min, max, vec2(screen_width(), screen_height()));
-        let sprites =
-            SpriteRenderer::load(game.terrain_scene(), Path::new(env!("CARGO_MANIFEST_DIR")))
-                .await?;
+        let sprites = SpriteRenderer::load(
+            game.map(),
+            game.terrain_scripts(),
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+        )
+        .await?;
         Ok(Self {
-            game,
+            _game: game,
             map,
             viewport,
             sprites,
@@ -46,16 +49,9 @@ impl GameScreen {
 
         let elapsed_ms = (get_time() * 1000.0) as u64;
         self.map.draw_base(&self.viewport);
-        self.sprites.draw_ground(
-            self.game.terrain_scene().ground(),
-            &self.viewport,
-            elapsed_ms,
-        );
-        self.sprites.draw_world(
-            self.game.terrain_scene().world(),
-            &self.viewport,
-            elapsed_ms,
-        );
+        self.sprites.draw_ground(&self.viewport, elapsed_ms);
+        self.sprites.draw_world(&self.viewport, elapsed_ms);
+        self.map.draw_codes(&self.viewport);
         self.map.draw_grid(&self.viewport, self.selected_hex);
 
         if is_key_pressed(KeyCode::Escape) {

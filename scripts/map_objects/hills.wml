@@ -1,4 +1,6 @@
 [map_object]
     id=hills
+    codes=hills,Hh,Hd,Mm
     color=8b7650
+    renderer=terrain/hills.lua
 [/map_object]

@@ -48,7 +48,7 @@ pub struct VisualTile {
 }
 
 pub fn gameplay_type(code: &str) -> &'static str {
-    let (base, overlay) = split(code);
+    let (base, overlay) = visual_codes(code);
     if overlay.starts_with('B') {
         "grassland"
     } else if overlay.starts_with('V') {
@@ -84,7 +84,7 @@ pub fn build_visuals(map: &Map) -> Vec<VisualTile> {
         for x in 1..=map.width as i64 {
             let position = Position { x, y };
             let code = map.raw(position).unwrap_or("Gg");
-            let (base, overlay) = split(code);
+            let (base, overlay) = visual_codes(code);
             // Типы из rule_managed_base будут добавлены terrain-правилами.
             // Если нарисовать их и здесь, один гекс получит две основы.
             if !rule_managed_base(base) {
@@ -133,7 +133,7 @@ pub fn build_visuals(map: &Map) -> Vec<VisualTile> {
                 let Ok(neighbor) = map.raw(neighbor) else {
                     continue;
                 };
-                let neighbor_base = split(neighbor).0;
+                let neighbor_base = visual_codes(neighbor).0;
                 if !is_water(base) && matches!(neighbor_base, "Ww" | "Wwf" | "Wwg") {
                     result.push(VisualTile {
                         position: neighbors(position)[direction],
@@ -303,7 +303,7 @@ fn add_castle_walls(map: &Map, result: &mut Vec<VisualTile>) {
             for y in 1..=map.height as i64 {
                 for x in 1..=map.width as i64 {
                     let position = Position { x, y };
-                    let base = split(map.raw(position).unwrap_or("Gg")).0;
+                    let base = visual_codes(map.raw(position).unwrap_or("Gg")).0;
                     let belongs = if keep_pass {
                         is_raised_keep(base)
                     } else {
@@ -313,8 +313,8 @@ fn add_castle_walls(map: &Map, result: &mut Vec<VisualTile>) {
                         continue;
                     }
                     let adjacent = neighbors(position);
-                    let neighbor_bases =
-                        adjacent.map(|neighbor| map.raw(neighbor).ok().map(|value| split(value).0));
+                    let neighbor_bases = adjacent
+                        .map(|neighbor| map.raw(neighbor).ok().map(|value| visual_codes(value).0));
                     let connected = neighbor_bases.map(|value| {
                         value.is_some_and(|base| {
                             if keep_pass {
@@ -568,7 +568,8 @@ fn mountain_range_base_y(image: &str) -> Option<i64> {
 }
 
 fn is_mountain(map: &Map, position: Position) -> bool {
-    map.raw(position).is_ok_and(|value| split(value).0 == "Mm")
+    map.raw(position)
+        .is_ok_and(|value| visual_codes(value).0 == "Mm")
 }
 
 fn mountain_single_image(position: Position) -> &'static str {
@@ -591,7 +592,7 @@ fn is_raised_keep(base: &str) -> bool {
     is_keep(base) && !base.starts_with("Ke")
 }
 
-fn split(code: &str) -> (&str, &str) {
+pub fn visual_codes(code: &str) -> (&str, &str) {
     let code = code.split_whitespace().last().unwrap_or(code);
     code.split_once('^').unwrap_or((code, ""))
 }
@@ -743,7 +744,7 @@ fn forest_needs_small(map: &Map, position: Position, overlay: &str) -> bool {
     }
     neighbors(position).into_iter().any(|neighbor| {
         map.raw(neighbor).is_ok_and(|value| {
-            let (base, overlay) = split(value);
+            let (base, overlay) = visual_codes(value);
             is_water(base)
                 || base.starts_with('C')
                 || base.starts_with('K')
@@ -768,7 +769,7 @@ fn wood_bridge_visuals(map: &Map) -> Vec<VisualTile> {
     for y in 1..=map.height as i64 {
         for x in 1..=map.width as i64 {
             let position = Position { x, y };
-            let (_, overlay) = split(map.raw(position).unwrap_or(""));
+            let (_, overlay) = visual_codes(map.raw(position).unwrap_or(""));
             if !overlay.starts_with("Bw") {
                 continue;
             }
@@ -776,7 +777,7 @@ fn wood_bridge_visuals(map: &Map) -> Vec<VisualTile> {
             let around = neighbors(position);
             let adjacent = around.map(|neighbor| {
                 map.raw(neighbor)
-                    .is_ok_and(|code| split(code).1.starts_with("Bw"))
+                    .is_ok_and(|code| visual_codes(code).1.starts_with("Bw"))
             });
             let (first, second) = bridge_axis(overlay);
             let mut connected = [false; 6];
@@ -817,7 +818,7 @@ fn wood_bridge_visuals(map: &Map) -> Vec<VisualTile> {
                 }
                 let water = map
                     .raw(around[direction])
-                    .is_ok_and(|code| is_water(split(code).0));
+                    .is_ok_and(|code| is_water(visual_codes(code).0));
                 result.push(VisualTile {
                     // В оригинальном TRACK_BORDER изображение принадлежит
                     // соседнему береговому гексу и смотрит назад на мост.

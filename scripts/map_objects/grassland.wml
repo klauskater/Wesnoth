@@ -1,4 +1,6 @@
 [map_object]
     id=grassland
+    codes=grassland,Gg,Gs,Gd,Gll
     color=6f914d
+    renderer=terrain/grass.lua
 [/map_object]

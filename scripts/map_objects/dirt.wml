@@ -1,0 +1,6 @@
+[map_object]
+    id=dirt
+    codes=Re
+    color=8b7650
+    renderer=terrain/dirt.lua
+[/map_object]

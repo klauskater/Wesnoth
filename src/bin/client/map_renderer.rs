@@ -12,6 +12,7 @@ struct Cell {
     position: Position,
     center: Vec2,
     color: Color,
+    code: String,
 }
 
 /// Immutable, client-side cache built once when a scenario is opened.
@@ -35,6 +36,7 @@ impl MapRenderer {
                     position: Position { x, y },
                     center: hex_center(x, y),
                     color,
+                    code: code.to_owned(),
                 });
             }
         }
@@ -72,6 +74,37 @@ impl MapRenderer {
                     GOLD
                 } else {
                     Color::from_rgba(15, 20, 24, 110)
+                },
+            );
+        }
+    }
+
+    pub fn draw_codes(&self, viewport: &MapViewport) {
+        let screen = vec2(screen_width(), screen_height());
+        let font_size = (viewport.zoom() * 0.34).clamp(10.0, 18.0) as u16;
+        for cell in &self.cells {
+            let center = viewport.project(cell.center, screen);
+            let size = measure_text(&cell.code, None, font_size, 1.0);
+            let x = center.x - size.width * 0.5;
+            let y = center.y + size.height * 0.5;
+            draw_text_ex(
+                &cell.code,
+                x + 1.0,
+                y + 1.0,
+                TextParams {
+                    font_size,
+                    color: Color::from_rgba(0, 0, 0, 210),
+                    ..Default::default()
+                },
+            );
+            draw_text_ex(
+                &cell.code,
+                x,
+                y,
+                TextParams {
+                    font_size,
+                    color: WHITE,
+                    ..Default::default()
                 },
             );
         }

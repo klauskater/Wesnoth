@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::{
     engine::{Engine, Map, Object, World},
-    terrain_scene::TerrainScene,
+    terrain_scene::TerrainScript,
     value::Value,
     wml::{self, Node},
 };
@@ -32,7 +32,7 @@ pub struct Game {
     pub start_dialog: String,
     engine: Engine,
     map_tiles: MapTiles,
-    terrain_scene: TerrainScene,
+    terrain_scripts: Vec<TerrainScript>,
     dialogs: BTreeMap<String, Vec<DialogLine>>,
     pending_dialog: Option<String>,
     scenario_path: String,
@@ -112,6 +112,7 @@ impl Game {
         let map_node = one_root(&map_document, "map")?;
         let map = load_map(map_node)?;
         let mut map_tiles = MapTiles::default();
+        let mut terrain_scripts = Vec::new();
         for path in split_paths(resources.attribute("map_objects")?) {
             let roots = read_wml_from(path, read)?;
             let map_object = one_root(&roots, "map_object")?;
@@ -124,6 +125,17 @@ impl Game {
                 .unwrap_or([96, 96, 96]);
             if map_tiles.0.insert(id.clone(), MapTile { color }).is_some() {
                 return Err(format!("duplicate map object id: {id}"));
+            }
+            if let Some(renderer) = map_object.attributes.get("renderer") {
+                terrain_scripts.push(TerrainScript {
+                    family: id,
+                    codes: split_paths(map_object.attribute("codes")?)
+                        .map(str::to_owned)
+                        .collect(),
+                    source: read(renderer).map_err(|error| {
+                        format!("cannot read terrain renderer {renderer}: {error}")
+                    })?,
+                });
             }
         }
         for cell in &map.cells {
@@ -289,7 +301,7 @@ impl Game {
             start_dialog: scenario.attribute("on_start_dialog")?.into(),
             engine,
             map_tiles,
-            terrain_scene: TerrainScene::default(),
+            terrain_scripts,
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
             scenario_path: scenario_path.into(),
@@ -442,8 +454,8 @@ impl Game {
         &self.map_tiles
     }
 
-    pub fn terrain_scene(&self) -> &TerrainScene {
-        &self.terrain_scene
+    pub fn terrain_scripts(&self) -> &[TerrainScript] {
+        &self.terrain_scripts
     }
 
     pub fn query(&self, function: &str, command: Value) -> Result<Value, String> {
@@ -652,8 +664,346 @@ mod tests {
             game.map_tiles().get("grassland").unwrap().color,
             [111, 145, 77]
         );
+        let terrain =
+            crate::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
+                .unwrap();
+        let grass_count = game
+            .map()
+            .cells
+            .iter()
+            .filter(|code| matches!(crate::terrain::visual_codes(code).0, "grassland" | "Gg"))
+            .count();
+        assert_eq!(
+            terrain
+                .ground()
+                .iter()
+                .filter(|sprite| { sprite.family == "grassland" && sprite.local_order == -1000 })
+                .count(),
+            grass_count
+        );
+        let forest_count = game
+            .map()
+            .cells
+            .iter()
+            .filter(|code| code.as_str() == "forest")
+            .count();
+        assert_eq!(
+            terrain
+                .world()
+                .iter()
+                .filter(|sprite| sprite.family == "forest")
+                .count(),
+            forest_count
+        );
+        assert!(
+            terrain
+                .world()
+                .iter()
+                .all(|sprite| sprite.frames.assets[0].starts_with("forest:mixed-summer"))
+        );
+        assert!(
+            terrain
+                .ground()
+                .iter()
+                .filter(|sprite| sprite.local_order == -1000)
+                .map(|sprite| &sprite.frames.assets[0])
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                > 1
+        );
+        assert_eq!(
+            terrain,
+            crate::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
+                .unwrap()
+        );
         assert_eq!(game.dialog(&game.start_dialog).unwrap().len(), 2);
         assert_eq!(game.revision(), 0);
+    }
+
+    #[test]
+    fn loads_dirt_bases_and_sprite_based_grass_transitions() {
+        let game = Game::load(scripts(), "scenarios/rooting_out_a_mage.wml").unwrap();
+        let terrain =
+            crate::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
+                .unwrap();
+        let dirt_count = game
+            .map()
+            .cells
+            .iter()
+            .filter(|code| crate::terrain::visual_codes(code).0 == "Re")
+            .count();
+        assert_eq!(
+            terrain
+                .ground()
+                .iter()
+                .filter(|sprite| { sprite.family == "dirt" && sprite.local_order == -1000 })
+                .count(),
+            dirt_count
+        );
+        let grassland_count = game
+            .map()
+            .cells
+            .iter()
+            .filter(|code| {
+                matches!(
+                    crate::terrain::visual_codes(code).0,
+                    "grassland" | "Gg" | "Gs" | "Gd" | "Gll"
+                )
+            })
+            .count();
+        assert_eq!(
+            terrain
+                .ground()
+                .iter()
+                .filter(|sprite| { sprite.family == "grassland" && sprite.local_order == -1000 })
+                .count(),
+            grassland_count
+        );
+        assert!(terrain.ground().iter().any(|sprite| {
+            sprite.family == "grassland" && sprite.frames.assets[0].starts_with("grassland:green-")
+        }));
+        assert!(
+            !terrain
+                .ground()
+                .iter()
+                .any(|sprite| sprite.frames.assets[0].starts_with("dirt:dirt-"))
+        );
+        let missing_assets = terrain
+            .assets()
+            .values()
+            .filter(|path| !Path::new(env!("CARGO_MANIFEST_DIR")).join(path).is_file())
+            .collect::<Vec<_>>();
+        assert!(missing_assets.is_empty(), "{missing_assets:?}");
+    }
+
+    #[test]
+    fn loads_original_road_assets_for_each_campaign_map() {
+        for scenario in [
+            "scenarios/rooting_out_a_mage.wml",
+            "scenarios/the_chase.wml",
+            "scenarios/guarded_castle.wml",
+            "scenarios/return_to_the_village.wml",
+        ] {
+            let game = Game::load(scripts(), scenario).unwrap();
+            assert_eq!(game.terrain_scripts()[0].family, "road");
+            let terrain =
+                crate::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
+                    .unwrap();
+            let road_count = game
+                .map()
+                .cells
+                .iter()
+                .filter(|code| matches!(crate::terrain::visual_codes(code).0, "Rd" | "Rr" | "Rp"))
+                .count();
+            assert_eq!(
+                terrain
+                    .ground()
+                    .iter()
+                    .filter(|sprite| sprite.family == "road" && sprite.local_order == -1000)
+                    .count(),
+                road_count,
+                "{scenario}"
+            );
+            assert!(terrain.assets().iter().all(|(id, path)| {
+                !id.starts_with("road:")
+                    || Path::new(env!("CARGO_MANIFEST_DIR")).join(path).is_file()
+            }));
+        }
+    }
+
+    #[test]
+    fn loads_original_decorations_for_each_campaign_map() {
+        let decoration_codes = ["Efm", "Gvs", "Es", "Em", "Edb", "Eff", "Wm"];
+        for scenario in [
+            "scenarios/rooting_out_a_mage.wml",
+            "scenarios/the_chase.wml",
+            "scenarios/guarded_castle.wml",
+            "scenarios/return_to_the_village.wml",
+        ] {
+            let game = Game::load(scripts(), scenario).unwrap();
+            let terrain =
+                crate::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
+                    .unwrap();
+            let decoration_sprites = terrain
+                .ground()
+                .iter()
+                .filter(|sprite| sprite.family == "decorations")
+                .collect::<Vec<_>>();
+
+            for (index, code) in game.map().cells.iter().enumerate() {
+                let (_, overlay) = crate::terrain::visual_codes(code);
+                if decoration_codes.contains(&overlay) {
+                    let position = crate::engine::Position {
+                        x: (index % game.map().width + 1) as i64,
+                        y: (index / game.map().width + 1) as i64,
+                    };
+                    assert!(
+                        decoration_sprites
+                            .iter()
+                            .any(|sprite| sprite.anchor == position),
+                        "{scenario}: no decoration sprite for {code} at {position:?}"
+                    );
+                }
+            }
+
+            assert!(decoration_sprites.iter().all(|sprite| {
+                sprite.frames.assets.iter().all(|asset| {
+                    let path = terrain.assets().get(asset).unwrap();
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join(path).is_file()
+                })
+            }));
+            for windmill in decoration_sprites
+                .iter()
+                .filter(|sprite| sprite.frames.assets[0].starts_with("decorations:windmill-"))
+            {
+                assert_eq!(windmill.frames.assets.len(), 18);
+                assert!(matches!(windmill.frames.frame_ms, 30 | 50));
+            }
+        }
+    }
+
+    #[test]
+    fn loads_original_hills_mountains_and_peaks_for_each_campaign_map() {
+        let mut checked_long_ranges = 0;
+        for scenario in [
+            "scenarios/rooting_out_a_mage.wml",
+            "scenarios/the_chase.wml",
+            "scenarios/guarded_castle.wml",
+            "scenarios/return_to_the_village.wml",
+        ] {
+            let game = Game::load(scripts(), scenario).unwrap();
+            let terrain =
+                crate::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
+                    .unwrap();
+            let elevated_count = game
+                .map()
+                .cells
+                .iter()
+                .filter(|code| matches!(crate::terrain::visual_codes(code).0, "Hh" | "Hd" | "Mm"))
+                .count();
+            assert_eq!(
+                terrain
+                    .ground()
+                    .iter()
+                    .filter(|sprite| sprite.family == "hills" && sprite.local_order == -1000)
+                    .count(),
+                elevated_count,
+                "{scenario}"
+            );
+            let desert_count = game
+                .map()
+                .cells
+                .iter()
+                .filter(|code| crate::terrain::visual_codes(code).0 == "Hd")
+                .count();
+            assert_eq!(
+                terrain
+                    .ground()
+                    .iter()
+                    .filter(|sprite| {
+                        sprite.family == "hills"
+                            && sprite.local_order == -1000
+                            && sprite.frames.assets[0].starts_with("hills:desert")
+                    })
+                    .count(),
+                desert_count,
+                "{scenario}"
+            );
+            if game
+                .map()
+                .cells
+                .iter()
+                .any(|code| crate::terrain::visual_codes(code).0 == "Mm")
+            {
+                assert!(terrain.world().iter().any(|sprite| {
+                    sprite.family == "hills" && sprite.frames.assets[0].starts_with("hills:basic")
+                }));
+            }
+            assert!(terrain.world().iter().all(|sprite| {
+                let asset = sprite.frames.assets[0].as_str();
+                (!matches!(asset, "hills:basic" | "hills:basic2" | "hills:basic3")
+                    && !asset.starts_with("hills:basic-castle-"))
+                    || sprite.offset == [-90.0, -108.0]
+            }));
+            for sprite in terrain.world().iter().filter(|sprite| {
+                matches!(
+                    sprite.frames.assets[0].as_str(),
+                    "hills:basic_range3_1" | "hills:basic_range4_1"
+                )
+            }) {
+                let (direction, side) = if sprite.frames.assets[0] == "hills:basic_range3_1" {
+                    (2, 1)
+                } else {
+                    (1, 2)
+                };
+                let first = sprite.anchor;
+                let first_neighbors = crate::terrain::neighbors(first);
+                let second = first_neighbors[direction];
+                let second_neighbors = crate::terrain::neighbors(second);
+                let third = second_neighbors[direction];
+                let third_neighbors = crate::terrain::neighbors(third);
+                let fourth = third_neighbors[direction];
+                let positions = [
+                    first,
+                    first_neighbors[side],
+                    second,
+                    second_neighbors[side],
+                    third,
+                    third_neighbors[side],
+                    fourth,
+                    crate::terrain::neighbors(fourth)[side],
+                ];
+                assert_eq!(
+                    sprite.clip_hexes.as_slice(),
+                    positions.as_slice(),
+                    "{scenario}: mountain range at {:?} has the wrong clip mask",
+                    sprite.anchor
+                );
+                for position in positions {
+                    assert_eq!(
+                        game.map()
+                            .raw(position)
+                            .ok()
+                            .map(crate::terrain::visual_codes)
+                            .map(|codes| codes.0),
+                        Some("Mm"),
+                        "{scenario}: mountain range at {:?} spills through {position:?}",
+                        sprite.anchor
+                    );
+                }
+                checked_long_ranges += 1;
+            }
+
+            let peak_positions = game
+                .map()
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, code)| crate::terrain::visual_codes(code).1 == "Xm")
+                .map(|(index, _)| crate::engine::Position {
+                    x: (index % game.map().width + 1) as i64,
+                    y: (index / game.map().width + 1) as i64,
+                })
+                .collect::<Vec<_>>();
+            for position in peak_positions {
+                assert!(terrain.world().iter().any(|sprite| {
+                    sprite.family == "hills"
+                        && sprite.anchor == position
+                        && sprite.frames.assets[0].starts_with("hills:cloud")
+                }));
+            }
+
+            let missing_assets = terrain
+                .assets()
+                .iter()
+                .filter(|(id, path)| {
+                    id.starts_with("hills:")
+                        && !Path::new(env!("CARGO_MANIFEST_DIR")).join(path).is_file()
+                })
+                .collect::<Vec<_>>();
+            assert!(missing_assets.is_empty(), "{scenario}: {missing_assets:?}");
+        }
+        assert!(checked_long_ranges > 0);
     }
 
     #[test]
