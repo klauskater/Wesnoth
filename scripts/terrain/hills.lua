@@ -16,7 +16,8 @@ end
 local function noise(x, y, rule)
     local a = u32((x + 92872973) ~ 918273)
     local b = u32((y + 1672517) ~ 128123)
-    local c = u32((hash_string(rule) + 127390) ~ 13923787)
+    local hash = type(rule) == "number" and rule or hash_string(rule)
+    local c = u32((hash + 127390) ~ 13923787)
     local mixed = u32(a * b * c + a * b + b * c + a * c + a + b + c)
     return u32(mixed * mixed)
 end
@@ -44,6 +45,121 @@ local function neighbors(x, y)
         { x - 1, y + up + 1 },
         { x - 1, y + up },
     }
+end
+
+-- Coordinates copied from the maps in new-mountains.cfg.  Every point,
+-- including "*", receives a cropped part of a global image in Wesnoth.
+local PATTERNS = {
+    range3 = {
+        { "*", 2, 0 }, { "*", 1, 0 }, { "*", 3, 0 }, { "*", 0, 1 },
+        { "1", 2, 1 }, { "*", 4, 1 }, { "1", 1, 1 }, { "1", 3, 1 },
+        { "*", 5, 1 }, { "*", 0, 2 }, { "1", 2, 2 }, { "1", 4, 2 },
+        { "*", 6, 2 }, { "*", 1, 2 }, { "1", 3, 2 }, { "1", 5, 2 },
+        { "*", 2, 3 }, { "1", 4, 3 }, { "*", 6, 3 }, { "*", 3, 3 },
+        { "*", 5, 3 },
+    },
+    range4 = {
+        { "*", 4, 0 }, { "*", 3, 0 }, { "*", 5, 0 }, { "*", 2, 1 },
+        { "1", 4, 1 }, { "*", 6, 1 }, { "*", 1, 1 }, { "1", 3, 1 },
+        { "1", 5, 1 }, { "*", 0, 2 }, { "1", 2, 2 }, { "1", 4, 2 },
+        { "*", 6, 2 }, { "1", 1, 2 }, { "1", 3, 2 }, { "*", 5, 2 },
+        { "*", 0, 3 }, { "1", 2, 3 }, { "*", 4, 3 }, { "*", 1, 3 },
+        { "*", 3, 3 },
+    },
+    range1 = {
+        { "*", 1, 0 }, { "*", 0, 1 }, { "*", 2, 1 }, { "1", 1, 1 },
+        { "*", 3, 1 }, { "*", 0, 2 }, { "1", 2, 2 }, { "*", 4, 2 },
+        { "*", 1, 2 }, { "1", 3, 2 }, { "*", 5, 2 }, { "*", 2, 3 },
+        { "*", 4, 3 }, { "*", 3, 3 },
+    },
+    range2 = {
+        { "*", 3, 0 }, { "*", 2, 1 }, { "*", 4, 1 }, { "*", 1, 1 },
+        { "1", 3, 1 }, { "*", 5, 1 }, { "*", 0, 2 }, { "1", 2, 2 },
+        { "*", 4, 2 }, { "1", 1, 2 }, { "*", 3, 2 }, { "*", 0, 3 },
+        { "*", 2, 3 },
+    },
+    block = {
+        { "*", 2, 0 }, { "*", 1, 0 }, { "*", 3, 0 }, { "*", 0, 1 },
+        { "1", 2, 1 }, { "*", 4, 1 }, { "1", 1, 1 }, { "1", 3, 1 },
+        { "*", 0, 2 }, { "1", 2, 2 }, { "*", 4, 2 }, { "*", 1, 2 },
+        { "*", 3, 2 }, { "*", 2, 3 },
+    },
+    peak_range = {
+        { "*", 1, 0 }, { "*", 3, 0 }, { "*", 0, 1 }, { "1", 2, 1 },
+        { "1", 1, 1 }, { "2", 3, 1 }, { "*", 0, 2 }, { "2", 2, 2 },
+        { "2", 1, 2 }, { "*", 3, 2 },
+    },
+    peak_large = {
+        { "*", 1, 0 }, { "*", 0, 1 }, { "*", 2, 1 }, { "1", 1, 1 },
+        { "2", 0, 2 }, { "2", 2, 2 }, { "2", 1, 2 },
+    },
+}
+
+local function legacy_sum(position, delta)
+    local parity = position[1] % 2 ~= 0
+    local x = position[1] + delta[1]
+    local y = position[2] + delta[2]
+    if delta[1] > 0 and delta[1] % 2 ~= 0 and parity then
+        y = y + 1
+    elseif delta[1] < 0 and delta[1] % 2 ~= 0 and not parity then
+        y = y - 1
+    end
+    return { x, y }
+end
+
+local function pattern_origin(pattern, x, y)
+    local anchor
+    for _, point in ipairs(pattern) do
+        if point[1] == "1" then
+            anchor = point
+            break
+        end
+    end
+    return legacy_sum({ x - 1, y - 1 }, { -anchor[2], -anchor[3] })
+end
+
+local function place_pattern(pattern, x, y, kind)
+    local anchor
+    for _, point in ipairs(pattern) do
+        if point[1] == "1" then
+            anchor = point
+            break
+        end
+    end
+    local result = {}
+    for _, point in ipairs(pattern) do
+        if kind == nil or point[1] == kind then
+            -- WML builder columns are staggered down; client columns are
+            -- staggered up. Preserve pixel deltas, not raw row deltas.
+            local target_x = x + point[2] - anchor[2]
+            local row_shift = (point[2] % 2 - anchor[2] % 2
+                + (target_x % 2 == 0 and 1 or 0)
+                - (x % 2 == 0 and 1 or 0)) // 2
+            result[#result + 1] = { target_x, y + point[3] - anchor[3] + row_shift }
+        end
+    end
+    return result
+end
+
+local function rule_hash(constraint_count, names)
+    local hash = 0
+    for _, name in ipairs(names) do
+        hash = u32(hash + hash_string(name) * constraint_count)
+    end
+    return hash == 0 and 105533 or hash
+end
+
+local function range_rule_hash(pattern, stem, pieces)
+    local names = {}
+    for piece = 1, pieces do
+        names[#names + 1] = "mountains/" .. stem .. "_" .. piece .. "@V.png"
+    end
+    return rule_hash(#pattern, names)
+end
+
+local function pattern_noise(pattern, x, y, hash)
+    local origin = pattern_origin(pattern, x, y)
+    return noise(origin[1], origin[2], hash)
 end
 
 local function cell(map, x, y)
@@ -104,8 +220,16 @@ local function clip_positions(positions)
     return result
 end
 
-local function emit_range(sprites, assets, stem, pieces, x, y, center_y, bases, positions)
-    local clips = clip_positions(positions)
+local function single_footprint(x, y)
+    local positions = { { x, y } }
+    for _, position in ipairs(neighbors(x, y)) do
+        positions[#positions + 1] = position
+    end
+    return positions
+end
+
+local function emit_range(sprites, assets, stem, pieces, x, y, center_x, center_y, bases, footprint)
+    local clips = clip_positions(footprint)
     for piece = 1, pieces do
         emit(
             sprites,
@@ -115,7 +239,7 @@ local function emit_range(sprites, assets, stem, pieces, x, y, center_y, bases, 
             y,
             0,
             "world",
-            -90,
+            -center_x,
             -center_y,
             36 + bases[piece] - center_y,
             clips
@@ -136,23 +260,40 @@ end
 
 local function restricted_asset(map, x, y)
     local hard = {}
+    local count = 0
     for direction, neighbor in ipairs(neighbors(x, y)) do
         hard[direction] = hard_edge(cell(map, neighbor[1], neighbor[2]))
-    end
-    for _, pair in ipairs({ { 1, 2, "n-ne" }, { 6, 1, "nw-n" }, { 5, 6, "sw-nw" } }) do
-        if hard[pair[1]] and hard[pair[2]] then
-            return "basic-castle-" .. pair[3]
-        end
-    end
-    for direction = 1, 6 do
         if hard[direction] then
-            local stem = "basic-castle-" .. DIRECTIONS[direction]
-            if direction == 1 then
-                return choose(stem, 3, x, y, "mountains/basic-castle-n@V")
-            end
-            return stem
+            count = count + 1
         end
     end
+    if count == 2 then
+        for _, pair in ipairs({ { 1, 2, "n-ne" }, { 6, 1, "nw-n" }, { 5, 6, "sw-nw" } }) do
+            if hard[pair[1]] and hard[pair[2]] then
+                return "basic-castle-" .. pair[3]
+            end
+        end
+    end
+    if count == 1 then
+        for direction = 1, 6 do
+            if hard[direction] then
+                local stem = "basic-castle-" .. DIRECTIONS[direction]
+                if direction == 1 then
+                    return choose(stem, 3, x, y, "mountains/basic-castle-n@V")
+                end
+                return stem
+            end
+        end
+    end
+end
+
+local function touches_hard_edge(map, x, y)
+    for _, neighbor in ipairs(neighbors(x, y)) do
+        if hard_edge(cell(map, neighbor[1], neighbor[2])) then
+            return true
+        end
+    end
+    return false
 end
 
 local function transitions(map, sprites, assets, stem, order, source, target, pairs)
@@ -251,103 +392,98 @@ return function(map)
     end, { { 1, 2, "n-ne" }, { 4, 5, "s-sw" } })
 
     -- Original order: restricted edges, 2x4, 1x3, 2x2, then singles.
-    for y = 1, map.height do
-        for x = 1, map.width do
+    local small_marked = {}
+    for x = 1, map.width do
+        for y = 1, map.height do
             if is_mountain(map, x, y) then
                 local name = restricted_asset(map, x, y)
                 if name then
                     claimed[key(x, y)] = true
-                    emit(sprites, assets, name, x, y, 0, "world", -90, -108, 35, { { x = x, y = y } })
+                    emit(sprites, assets, name, x, y, 0, "world", -90, -108, 35,
+                        clip_positions(single_footprint(x, y)))
+                elseif touches_hard_edge(map, x, y) then
+                    small_marked[key(x, y)] = true
                 end
             end
         end
     end
 
     for _, config in ipairs({
-        { direction = 3, side = 2, stem = "basic_range3", probability = 18, center_y = 144,
-          bases = { 107, 107, 73, 108, 144 } },
-        { direction = 2, side = 3, stem = "basic_range4", probability = 26, center_y = 216,
-          bases = { 144, 108, 73, 107, 107 } },
+        { pattern = PATTERNS.range3, stem = "basic_range3", probability = 18, center_x = 144, center_y = 108,
+          bases = { 107, 107, 73, 108, 144 }, hash = range_rule_hash(PATTERNS.range3, "basic_range3", 5) },
+        { pattern = PATTERNS.range4, stem = "basic_range4", probability = 26, center_x = 252, center_y = 108,
+          bases = { 144, 108, 73, 107, 107 }, hash = range_rule_hash(PATTERNS.range4, "basic_range4", 5) },
     }) do
-        for y = 1, map.height do
-            for x = 1, map.width do
-                local adjacent = neighbors(x, y)
-                local second = adjacent[config.direction]
-                local second_adjacent = neighbors(second[1], second[2])
-                local third = second_adjacent[config.direction]
-                local third_adjacent = neighbors(third[1], third[2])
-                local fourth = third_adjacent[config.direction]
-                local positions = {
-                    { x, y },
-                    adjacent[config.side],
-                    second,
-                    second_adjacent[config.side],
-                    third,
-                    third_adjacent[config.side],
-                    fourth,
-                    neighbors(fourth[1], fourth[2])[config.side],
-                }
-                if noise(x - 1, y - 1, config.stem) % 100 < config.probability
+        for x = 1, map.width do
+            for y = 1, map.height do
+                local positions = place_pattern(config.pattern, x, y, "1")
+                if pattern_noise(config.pattern, x, y, config.hash) % 100 <= config.probability
                     and claim(map, claimed, positions)
                 then
-                    emit_range(sprites, assets, config.stem, 5, x, y, config.center_y, config.bases, positions)
+                    emit_range(sprites, assets, config.stem, 5, x, y, config.center_x, config.center_y,
+                        config.bases, place_pattern(config.pattern, x, y))
                 end
             end
         end
     end
 
     for _, config in ipairs({
-        { direction = 3, stem = "basic_range1", probability = 20, center_y = 144,
-          bases = { 107, 107, 144 } },
-        { direction = 2, stem = "basic_range2", probability = 20, center_y = 216,
-          bases = { 144, 107, 107 } },
+        { pattern = PATTERNS.range1, stem = "basic_range1", probability = 20, center_x = 90, center_y = 144,
+          bases = { 107, 107, 144 }, hash = range_rule_hash(PATTERNS.range1, "basic_range1", 3) },
+        { pattern = PATTERNS.range2, stem = "basic_range2", probability = 20, center_x = 198, center_y = 144,
+          bases = { 144, 107, 107 }, hash = range_rule_hash(PATTERNS.range2, "basic_range2", 3) },
     }) do
-        for y = 1, map.height do
-            for x = 1, map.width do
-                local second = neighbors(x, y)[config.direction]
-                local third = neighbors(second[1], second[2])[config.direction]
-                if noise(x - 1, y - 1, config.stem) % 100 < config.probability
-                    and claim(map, claimed, { { x, y }, second, third })
-                then
-                    emit_range(sprites, assets, config.stem, 3, x, y, config.center_y, config.bases, { { x, y }, second, third })
-                end
-            end
-        end
-    end
-
-    for y = 1, map.height do
         for x = 1, map.width do
-            local adjacent = neighbors(x, y)
-            local east = adjacent[2]
-            local southeast = adjacent[3]
-            local far = neighbors(east[1], east[2])[3]
-            local positions = { { x, y }, east, southeast, far }
-            for _, config in ipairs({
-                { stem = "basic5", probability = 40 },
-                { stem = "basic6", probability = 30 },
-            }) do
-                if noise(x - 1, y - 1, config.stem) % 100 < config.probability
+            for y = 1, map.height do
+                local positions = place_pattern(config.pattern, x, y, "1")
+                if pattern_noise(config.pattern, x, y, config.hash) % 100 <= config.probability
                     and claim(map, claimed, positions)
                 then
-                    emit_range(sprites, assets, config.stem, 3, x, y, 144, { 107, 107, 107 }, positions)
-                    break
+                    emit_range(sprites, assets, config.stem, 3, x, y, config.center_x, config.center_y,
+                        config.bases, place_pattern(config.pattern, x, y))
                 end
             end
         end
     end
 
-    for y = 1, map.height do
+    for _, config in ipairs({
+        { stem = "basic5", probability = 40, hash = range_rule_hash(PATTERNS.block, "basic5", 3) },
+        { stem = "basic6", probability = 30, hash = range_rule_hash(PATTERNS.block, "basic6", 3) },
+    }) do
         for x = 1, map.width do
+            for y = 1, map.height do
+                local positions = place_pattern(PATTERNS.block, x, y, "1")
+                if pattern_noise(PATTERNS.block, x, y, config.hash) % 100 <= config.probability
+                    and claim(map, claimed, positions)
+                then
+                    emit_range(sprites, assets, config.stem, 3, x, y, 144, 108,
+                        { 107, 107, 107 }, place_pattern(PATTERNS.block, x, y))
+                end
+            end
+        end
+    end
+
+    for x = 1, map.width do
+        for y = 1, map.height do
             if is_mountain(map, x, y) and not claimed[key(x, y)] then
-                local name = choose("basic", 3, x, y, "mountains/basic@V")
-                emit(sprites, assets, name, x, y, 0, "world", -90, -108, -18, { { x = x, y = y } })
+                local name
+                local baseline
+                if small_marked[key(x, y)] then
+                    name = choose("basic-castle-n", 3, x, y, "mountains/basic-castle-n@V")
+                    baseline = 35
+                else
+                    name = choose("basic", 3, x, y, "mountains/basic@V")
+                    baseline = -18
+                end
+                emit(sprites, assets, name, x, y, 0, "world", -90, -108, baseline,
+                    clip_positions(single_footprint(x, y)))
             end
         end
     end
 
     local peak_claimed = {}
-    for y = 1, map.height do
-        for x = 1, map.width do
+    for x = 1, map.width do
+        for y = 1, map.height do
             if overlay_code(cell(map, x, y)) == "Xm" then
                 emit(
                     sprites,
@@ -359,51 +495,83 @@ return function(map)
                     "world",
                     -72,
                     -72,
-                    0,
-                    { { x = x, y = y } }
+                    52,
+                    clip_positions(single_footprint(x, y))
                 )
             end
         end
     end
-    for y = 1, map.height do
+    for x = 1, map.width do
+        for y = 1, map.height do
+            local claimed_positions = place_pattern(PATTERNS.peak_range, x, y, "1")
+            local required_positions = place_pattern(PATTERNS.peak_range, x, y, "1")
+            for _, position in ipairs(place_pattern(PATTERNS.peak_range, x, y, "2")) do
+                required_positions[#required_positions + 1] = position
+            end
+            local matches = true
+            for _, position in ipairs(required_positions) do
+                if overlay_code(cell(map, position[1], position[2])) ~= "Xm" then
+                    matches = false
+                    break
+                end
+            end
+            for _, position in ipairs(claimed_positions) do
+                if peak_claimed[key(position[1], position[2])] then
+                    matches = false
+                end
+            end
+            local hash = rule_hash(#PATTERNS.peak_range, {
+                "mountains/peak_range1_1.png",
+                "mountains/peak_range1_2.png",
+            })
+            if matches and pattern_noise(PATTERNS.peak_range, x, y, hash) % 100 <= 15 then
+                for _, position in ipairs(claimed_positions) do
+                    peak_claimed[key(position[1], position[2])] = true
+                end
+                local clips = clip_positions(place_pattern(PATTERNS.peak_range, x, y))
+                emit(sprites, assets, "peak_range1_1", x, y, 1, "world", -144, -108, 0, clips)
+                emit(sprites, assets, "peak_range1_2", x, y, 2, "world", -144, -108, 0, clips)
+            end
+        end
+    end
+    for _, config in ipairs({
+        { name = "peak_large1", probability = 25,
+          hash = rule_hash(#PATTERNS.peak_large, { "mountains/peak_large1@V.png" }) },
+        { name = "peak_large2", probability = 33,
+          hash = rule_hash(#PATTERNS.peak_large, { "mountains/peak_large2@V.png" }) },
+    }) do
         for x = 1, map.width do
-            if overlay_code(cell(map, x, y)) == "Xm" and not peak_claimed[key(x, y)] then
-                local northeast = neighbors(x, y)[2]
-                if overlay_code(cell(map, northeast[1], northeast[2])) == "Xm"
-                    and not peak_claimed[key(northeast[1], northeast[2])]
-                    and noise(x - 1, y - 1, "mountains/peak_range1") % 100 < 15
+            for y = 1, map.height do
+                local required_positions = place_pattern(PATTERNS.peak_large, x, y, "1")
+                for _, position in ipairs(place_pattern(PATTERNS.peak_large, x, y, "2")) do
+                    required_positions[#required_positions + 1] = position
+                end
+                local matches = not peak_claimed[key(x, y)]
+                for _, position in ipairs(required_positions) do
+                    if overlay_code(cell(map, position[1], position[2])) ~= "Xm" then
+                        matches = false
+                        break
+                    end
+                end
+                if matches
+                    and pattern_noise(PATTERNS.peak_large, x, y, config.hash) % 100 <= config.probability
                 then
                     peak_claimed[key(x, y)] = true
-                    peak_claimed[key(northeast[1], northeast[2])] = true
-                    local clips = { { x = x, y = y }, { x = northeast[1], y = northeast[2] } }
-                    emit(sprites, assets, "peak_range1_1", x, y, 1, "world", -90, -144, 0, clips)
-                    emit(sprites, assets, "peak_range1_2", x, y, 2, "world", -90, -144, 0, clips)
+                    emit(sprites, assets, config.name, x, y, 2, "world", -90, -144, 0,
+                        clip_positions(place_pattern(PATTERNS.peak_large, x, y)))
                 end
             end
         end
     end
-    for y = 1, map.height do
-        for x = 1, map.width do
+    for x = 1, map.width do
+        for y = 1, map.height do
             if overlay_code(cell(map, x, y)) == "Xm" and not peak_claimed[key(x, y)] then
-                local adjacent = neighbors(x, y)
-                local large = overlay_code(cell(map, adjacent[3][1], adjacent[3][2])) == "Xm"
-                    and overlay_code(cell(map, adjacent[4][1], adjacent[4][2])) == "Xm"
-                    and overlay_code(cell(map, adjacent[5][1], adjacent[5][2])) == "Xm"
-                local name
-                if large and noise(x - 1, y - 1, "mountains/peak_large1") % 100 < 25 then
-                    name = "peak_large1"
-                elseif large and noise(x - 1, y - 1, "mountains/peak_large2") % 100 < 33 then
-                    name = "peak_large2"
-                else
-                    name = choose("peak", 5, x, y, "mountains/peak@V")
-                end
-                local clips = { { x = x, y = y } }
-                if large then
-                    for direction = 3, 5 do
-                        clips[#clips + 1] = { x = adjacent[direction][1], y = adjacent[direction][2] }
-                    end
-                end
-                emit(sprites, assets, name, x, y, 2, "world", -90, -144, 0, clips)
+                local name = choose("peak", 5, x, y, "mountains/peak@V")
+                -- NEW:OVERLAY centers each variation using its own PNG size.
+                local offset_x = name == "peak" and -90 or -72
+                local offset_y = name == "peak" and -108 or -72
+                emit(sprites, assets, name, x, y, 2, "world", offset_x, offset_y, 52,
+                    clip_positions(single_footprint(x, y)))
             end
         end
     end

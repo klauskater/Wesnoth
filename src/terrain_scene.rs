@@ -61,6 +61,21 @@ pub struct PlacedSprite {
     pub local_order: i16,
     pub frames: SpriteFrames,
     pub clip_hexes: Vec<Position>,
+    pub image_mods: ImageModifiers,
+}
+
+/// WML image operations, applied once when preparing textures, before drawing.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ImageModifiers {
+    pub crop: Option<[u32; 4]>,
+    pub masks: Vec<String>,
+    pub opacity: u8,
+}
+
+impl Default for ImageModifiers {
+    fn default() -> Self {
+        Self { crop: None, masks: Vec::new(), opacity: 255 }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -110,6 +125,11 @@ impl TerrainScene {
             {
                 return Err(format!("unknown sprite asset: {missing}"));
             }
+            for mask in &sprite.image_mods.masks {
+                if !asset_paths.contains_key(mask) {
+                    return Err(format!("unknown sprite mask: {mask}"));
+                }
+            }
             match sprite.pass {
                 TerrainPass::Ground => ground.push(sprite),
                 TerrainPass::World => world.push(sprite),
@@ -124,8 +144,9 @@ impl TerrainScene {
             )
         });
         world.sort_by(|left, right| {
-            world_depth(left)
-                .total_cmp(&world_depth(right))
+            left.local_order
+                .cmp(&right.local_order)
+                .then_with(|| world_depth(left).total_cmp(&world_depth(right)))
                 .then(left.family_order.cmp(&right.family_order))
                 .then(left.local_order.cmp(&right.local_order))
                 .then(left.anchor.x.cmp(&right.anchor.x))
@@ -325,6 +346,17 @@ fn read_command(
         })
         .transpose()?
         .unwrap_or_default();
+    let crop = command.get::<Option<Vec<u32>>>("crop")
+        .map_err(|error| error.to_string())?
+        .map(|values| <[u32; 4]>::try_from(values).map_err(|_| "crop needs x,y,width,height".to_owned()))
+        .transpose()?;
+    if crop.is_some_and(|rect| rect[2] == 0 || rect[3] == 0) {
+        return Err("crop dimensions must be positive".into());
+    }
+    let masks = command.get::<Option<Vec<String>>>("masks")
+        .map_err(|error| error.to_string())?.unwrap_or_default()
+        .into_iter().map(|id| asset_id(family, &id)).collect();
+    let opacity = command.get::<Option<u8>>("opacity").map_err(|error| error.to_string())?.unwrap_or(255);
     Ok(PlacedSprite {
         family: family.into(),
         pass,
@@ -342,6 +374,7 @@ fn read_command(
             .map_err(|_| format!("terrain renderer {family}: invalid order"))?,
         frames,
         clip_hexes,
+        image_mods: ImageModifiers { crop, masks, opacity },
     })
 }
 
@@ -374,6 +407,7 @@ mod tests {
     fn sprite(pass: TerrainPass, family_order: i16, local_order: i16) -> PlacedSprite {
         PlacedSprite {
             family: "test".into(),
+            image_mods: ImageModifiers::default(),
             pass,
             anchor: Position { x: 1, y: 1 },
             offset: [0.0, 0.0],

@@ -1,4 +1,6 @@
 [map_object]
     id=water
+    codes=water,Wo,Wog,Wot,Ww,Wwr,Wwf,Wwg,Wwrg,Wwt,Wwrt,Ds,Dd
+    renderer=terrain/water.lua
     color=356b93
 [/map_object]

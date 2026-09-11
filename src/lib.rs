@@ -3,6 +3,7 @@ pub mod adventure;
 pub mod embedded;
 pub mod engine;
 pub mod game;
+pub mod map;
 pub mod terrain;
 pub mod terrain_rules;
 pub mod terrain_scene;

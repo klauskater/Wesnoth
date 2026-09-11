@@ -13,7 +13,7 @@ use std::{
 use macroquad::prelude::*;
 use wesnoth_engine::{
     engine::Map,
-    game::load_map,
+    map::load_map,
     terrain::{
         VisualKind, VisualTile, build_visuals, castle_wall_anchor, mask_castle_wall,
         mountain_range_anchor,

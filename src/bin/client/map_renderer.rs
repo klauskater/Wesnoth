@@ -1,7 +1,7 @@
 use macroquad::prelude::*;
 use wesnoth_engine::{
     engine::{Map, Position},
-    game::MapTiles,
+    map::MapTiles,
 };
 
 use crate::map_viewport::MapViewport;
