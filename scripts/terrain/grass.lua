@@ -118,6 +118,7 @@ local function apply_edge_rule(map, sprites, assets, claimed, rule)
             for direction, neighbor in ipairs(neighbors(tile.x, tile.y)) do
                 local target = base_code(cell(map, neighbor[1], neighbor[2]) or "")
                 if target ~= ""
+                    and not starts_with(target, "S")
                     and rule.target(target)
                     and claim(claimed, rule.channel, tile.x, tile.y, neighbor[1], neighbor[2])
                 then
@@ -139,6 +140,7 @@ end
 local function apply_leaf_litter_edges(map, sprites, assets, claimed)
     local function target_matches(code)
         return code ~= ""
+            and not starts_with(code, "S")
             and code ~= "Gll"
             and not starts_with(code, "Q")
             and not starts_with(code, "W")

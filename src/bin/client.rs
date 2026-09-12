@@ -1,3 +1,5 @@
+#[path = "client/battle.rs"]
+mod battle;
 use macroquad::prelude::*;
 use wesnoth_engine::{adventure::Adventure, game::Game};
 
@@ -5,10 +7,14 @@ use wesnoth_engine::{adventure::Adventure, game::Game};
 mod map_renderer;
 #[path = "client/map_viewport.rs"]
 mod map_viewport;
+#[path = "client/movement.rs"]
+mod movement;
 #[path = "client/screens/mod.rs"]
 mod screens;
 #[path = "client/sprite_renderer.rs"]
 mod sprite_renderer;
+#[path = "client/village_renderer.rs"]
+mod village_renderer;
 #[path = "client/widgets.rs"]
 mod widgets;
 
@@ -93,7 +99,7 @@ async fn main() {
             Screen::Game => {
                 let action = game_screen
                     .as_mut()
-                    .map(screens::game::GameScreen::draw)
+                    .map(|screen| screen.draw(&font))
                     .unwrap_or(screens::game::Action::Back);
                 if matches!(action, screens::game::Action::Back) {
                     screen = Screen::Adventures;

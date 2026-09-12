@@ -14,6 +14,24 @@ pub struct Ui {
 }
 
 impl Ui {
+    pub fn anchored(scale: f32, offset: Vec2) -> Self {
+        Self { scale, offset }
+    }
+
+    pub fn image(&self, texture: &Texture2D, rect: Rect) {
+        let rect = self.rect(rect);
+        draw_texture_ex(
+            texture,
+            rect.x,
+            rect.y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(rect.w, rect.h)),
+                ..Default::default()
+            },
+        );
+    }
+
     pub fn new() -> Self {
         let scale = (screen_width() / DESIGN_WIDTH)
             .min(screen_height() / DESIGN_HEIGHT)

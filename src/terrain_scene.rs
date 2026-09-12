@@ -74,7 +74,11 @@ pub struct ImageModifiers {
 
 impl Default for ImageModifiers {
     fn default() -> Self {
-        Self { crop: None, masks: Vec::new(), opacity: 255 }
+        Self {
+            crop: None,
+            masks: Vec::new(),
+            opacity: 255,
+        }
     }
 }
 
@@ -346,17 +350,27 @@ fn read_command(
         })
         .transpose()?
         .unwrap_or_default();
-    let crop = command.get::<Option<Vec<u32>>>("crop")
+    let crop = command
+        .get::<Option<Vec<u32>>>("crop")
         .map_err(|error| error.to_string())?
-        .map(|values| <[u32; 4]>::try_from(values).map_err(|_| "crop needs x,y,width,height".to_owned()))
+        .map(|values| {
+            <[u32; 4]>::try_from(values).map_err(|_| "crop needs x,y,width,height".to_owned())
+        })
         .transpose()?;
     if crop.is_some_and(|rect| rect[2] == 0 || rect[3] == 0) {
         return Err("crop dimensions must be positive".into());
     }
-    let masks = command.get::<Option<Vec<String>>>("masks")
-        .map_err(|error| error.to_string())?.unwrap_or_default()
-        .into_iter().map(|id| asset_id(family, &id)).collect();
-    let opacity = command.get::<Option<u8>>("opacity").map_err(|error| error.to_string())?.unwrap_or(255);
+    let masks = command
+        .get::<Option<Vec<String>>>("masks")
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| asset_id(family, &id))
+        .collect();
+    let opacity = command
+        .get::<Option<u8>>("opacity")
+        .map_err(|error| error.to_string())?
+        .unwrap_or(255);
     Ok(PlacedSprite {
         family: family.into(),
         pass,
@@ -374,7 +388,11 @@ fn read_command(
             .map_err(|_| format!("terrain renderer {family}: invalid order"))?,
         frames,
         clip_hexes,
-        image_mods: ImageModifiers { crop, masks, opacity },
+        image_mods: ImageModifiers {
+            crop,
+            masks,
+            opacity,
+        },
     })
 }
 

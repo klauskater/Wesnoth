@@ -1,6 +1,6 @@
 [map_object]
     id=decorations
-    codes=Efm,Gvs,Es,Em,Edb,Eff,Wm
+    codes=Efm,Gvs,Es,Em,Edb,Eff,Wm,Ewl,Ewf
     color=6f914d
     renderer=terrain/decorations.lua
 [/map_object]

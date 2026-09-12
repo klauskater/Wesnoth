@@ -246,8 +246,7 @@ impl Game {
                 .get(&key)
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            engine
-                .world
+            std::rc::Rc::make_mut(&mut engine.world)
                 .state
                 .insert(key, Value::Integer(starting.max(campaign.gold)));
         }

@@ -15,7 +15,7 @@
 
     [resources]
         map=maps/the_chase.wml
-        map_objects=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        map_objects=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/bridges.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
         unit_types=units/core-1.18.8.wml
         dialogs=dialogs/the_chase.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
@@ -24,6 +24,7 @@
 
     [side]
         id=player
+        flag_style=loyalist
         controller=human
         team_name=good
         shroud=yes
@@ -33,6 +34,7 @@
     [/side]
     [side]
         id=elves
+        flag_style=wood-elvish
         controller=ai
         team_name=elves
         gold=25
@@ -41,6 +43,7 @@
     [/side]
     [side]
         id=kidnappers
+        flag_style=undead
         controller=ai
         team_name=elves
         passive_leader=yes

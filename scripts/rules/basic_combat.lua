@@ -9,6 +9,7 @@ local function child(node, name)
 end
 
 local function side_team(context, id)
+    if context.combat_teams then return context.combat_teams[id] end
     local overridden = context.state:get("team:" .. id)
     if overridden then return overridden end
     local current = assert(context.state:get("scenario"), "missing scenario state")
@@ -816,7 +817,7 @@ end
 
 local function leadership_bonus(context, source)
     local bonus = 0
-    for _, leader in ipairs(context.objects:all()) do
+    for _, leader in ipairs((context.combat_units or context.objects:all())) do
         if allied(context, leader.side, source.side) and leader.id ~= source.id
             and leader.level > source.level
             and context.map:are_adjacent(leader.position, source.position)
@@ -829,7 +830,7 @@ end
 
 local function illuminated_lawful_bonus(context, source, base)
     local increase = 0
-    for _, unit in ipairs(context.objects:all()) do
+    for _, unit in ipairs((context.combat_units or context.objects:all())) do
         local light = ability(unit, "illuminates")
         if light and (unit.id == source.id
             or context.map:are_adjacent(unit.position, source.position)) then
@@ -853,7 +854,7 @@ end
 local function backstab_active(context, source, target, attack, attacking)
     if not attacking or not has_special(attack, "backstab") then return false end
     local opposite = opposite_hex(target.position, source.position)
-    for _, flanker in ipairs(context.objects:all()) do
+    for _, flanker in ipairs((context.combat_units or context.objects:all())) do
         if flanker.position.x == opposite.x and flanker.position.y == opposite.y
             and not allied(context, flanker.side, target.side)
             and not flanker.petrified and not flanker.stunned then
@@ -922,10 +923,17 @@ local function effective_strikes(unit, attack)
     return math.max(1, math.floor(attack.strikes * unit.hitpoints / unit.max_hitpoints))
 end
 
-function combat.preview_attack(context, command)
-    local attacker = assert(context.objects:get(command.attacker), "unknown attacker")
-    local defender = assert(context.objects:get(command.defender), "unknown defender")
+local function prepare_battle(context, command, attacker, defender)
+    attacker = attacker or assert(context.objects:get(command.attacker), "unknown attacker")
+    defender = defender or assert(context.objects:get(command.defender), "unknown defender")
     if command.position then attacker.position = command.position end
+    context.combat_units = context.objects:all(
+        {"side", "level", "position", "petrified", "stunned"}, {"ability"})
+    context.combat_teams = {}
+    local current = context.state:get("scenario", {}, {"side"})
+    for _, side in ipairs(children(current, "side")) do
+        context.combat_teams[side.id] = context.state:get("team:" .. side.id) or side.team_name
+    end
     local attack = find_attack(attacker, command.weapon)
     local chance, damage = attack_stats(context, attacker, defender, attack, true)
     local _, slowed_damage = attack_stats(context, attacker, defender, attack, true, true)
@@ -969,101 +977,70 @@ function combat.preview_attack(context, command)
     if berserk and retaliation then retaliation_strikes = 30 end
     local retaliation_first = retaliation and has_special(retaliation, "first_strike")
         and not has_special(attack, "first_strike")
-    local states = {{ attacker.hitpoints, defender.hitpoints,
-        attacker.slowed == true, defender.slowed == true, false, 1 }}
-    local function step(source_is_attacker, weapon, hit_chance, normal_damage, slow_damage)
-        local next_states, merged = {}, {}
-        local function add(state)
-            local key = table.concat({state[1], state[2], tostring(state[3]),
-                tostring(state[4]), tostring(state[5])}, ":")
-            if merged[key] then merged[key][6] = merged[key][6] + state[6]
-            else merged[key] = state; next_states[#next_states + 1] = state end
-        end
-        for _, state in ipairs(states) do
-            if state[5] then
-                add(state)
-            else
-                for _, hit in ipairs({false, true}) do
-                    local probability = state[6] * (hit and hit_chance or 100 - hit_chance) / 100
-                    if probability > 0 then
-                        local copy = {state[1], state[2], state[3], state[4], false, probability}
-                        if hit then
-                            local source_hp = source_is_attacker and 1 or 2
-                            local target_hp = source_is_attacker and 2 or 1
-                            local source_slowed = copy[source_is_attacker and 3 or 4]
-                            local inflicted = math.min(copy[target_hp],
-                                source_slowed and slow_damage or normal_damage)
-                            copy[target_hp] = copy[target_hp] - inflicted
-                            if has_special(weapon, "slow") then
-                                copy[source_is_attacker and 4 or 3] = true
-                            end
-                            if has_special(weapon, "drain") then
-                                local maximum = source_is_attacker
-                                    and attacker.max_hitpoints or defender.max_hitpoints
-                                copy[source_hp] = math.min(maximum,
-                                    copy[source_hp] + math.floor(inflicted / 2))
-                            end
-                            if has_special(weapon, "petrify") then copy[5] = true end
-                        end
-                        if copy[1] == 0 or copy[2] == 0 then copy[5] = true end
-                        add(copy)
-                    end
-                end
-            end
-        end
-        states = next_states
+    local function participant(unit, weapon, chance, damage, slowed_damage, strikes)
+        return { hp = unit.hitpoints, maximum = unit.max_hitpoints,
+            slowed = unit.slowed == true, chance = chance, damage = damage,
+            slowed_damage = slowed_damage, strikes = strikes,
+            slow = weapon ~= nil and has_special(weapon, "slow"),
+            heal_percent = weapon ~= nil and has_special(weapon, "drain") and 50 or 0,
+            petrify = weapon ~= nil and has_special(weapon, "petrify") }
     end
-    local rounds = berserk and 30 or math.max(strikes, retaliation_strikes)
-    for round = 1, rounds do
-        if retaliation_first then
-            if retaliation and round <= retaliation_strikes then
-                step(false, retaliation, retaliation_chance,
-                    retaliation_damage, slowed_retaliation_damage)
-            end
-            if round <= strikes then step(true, attack, chance, damage, slowed_damage) end
-        else
-            if round <= strikes then step(true, attack, chance, damage, slowed_damage) end
-            if retaliation and round <= retaliation_strikes then
-                step(false, retaliation, retaliation_chance,
-                    retaliation_damage, slowed_retaliation_damage)
-            end
-        end
-    end
-    local expected_attacker, expected_defender, kill, death = 0, 0, 0, 0
-    for _, state in ipairs(states) do
-        expected_attacker = expected_attacker + state[1] * state[6]
-        expected_defender = expected_defender + state[2] * state[6]
-        if state[2] == 0 then kill = kill + state[6] end
-        if state[1] == 0 then death = death + state[6] end
-    end
+    local attack_metadata = {attack_stats(context, attacker, defender, attack, true)}
+    local defense_metadata = retaliation and {attack_stats(context, defender, attacker, retaliation, false)} or {}
+    local model = {
+        attacker = participant(attacker, attack, chance, damage, slowed_damage, strikes),
+        defender = participant(defender, retaliation, retaliation_chance,
+            retaliation_damage, slowed_retaliation_damage, retaliation_strikes),
+        retaliation_first = retaliation_first == true,
+        berserk = berserk == true,
+    }
+    model.attacker.metadata = attack_metadata
+    model.defender.metadata = defense_metadata
     local time = time_of_day(context)
     local next_time = times[context.state:get("turn") % #times + 1]
-    return {
+    context.combat_units, context.combat_teams = nil, nil
+    return model, attack, retaliation, {
         chance = chance,
         damage = damage,
         strikes = strikes,
-        expected_damage = defender.hitpoints - expected_defender,
-        kill_probability = kill,
+        base_damage = attack.damage,
+        retaliation_base_damage = retaliation and retaliation.damage or 0,
+        resistance_modifier = attack_metadata[5],
+        leadership_modifier = attack_metadata[9],
+        retaliation_alignment_modifier = defense_metadata[8] or 0,
+        retaliation_resistance_modifier = defense_metadata[5] or 0,
+        retaliation_leadership_modifier = defense_metadata[9] or 0,
+        weapon_name = attack.name or attack.id,
+        damage_type = attack.damage_type,
+        range = attack.range,
         retaliation_chance = retaliation_chance,
         retaliation_damage = retaliation_damage,
         retaliation_strikes = retaliation_strikes,
-        expected_retaliation = attacker.hitpoints - expected_attacker,
-        death_probability = death,
         retaliation_name = retaliation and (retaliation.name or retaliation.id) or "—",
         time_of_day = time.id,
-        alignment_modifier = alignment_modifier(attacker.alignment, time.lawful_bonus),
+        alignment_modifier = attack_metadata[8],
         next_alignment_modifier = alignment_modifier(attacker.alignment,
             next_time.lawful_bonus),
     }
 end
 
-local function strike(context, events, source, target, attack, number, attacking,
-    multiplier, chance_reduction)
-    local chance, modified_damage, damage_type, resistance, effective_resistance,
-        time, alignment, alignment_bonus, leadership =
-        attack_stats(context, source, target, attack, attacking)
-    modified_damage = modified_damage * (multiplier or 1)
-    chance = math.max(0, chance - (chance_reduction or 0))
+function combat.preview_attack(context, command)
+    local model, _, _, result = prepare_battle(context, command)
+    -- Metadata stays in Lua; the native kernel only receives scalar combat inputs.
+    model.attacker.metadata, model.defender.metadata = nil, nil
+    local forecast = context.combat:forecast(model)
+    result.attacker_outcomes, result.defender_outcomes = forecast.attacker, forecast.defender
+    result.expected_damage = model.defender.hp - forecast.defender.expected
+    result.expected_retaliation = model.attacker.hp - forecast.attacker.expected
+    result.kill_probability, result.death_probability = forecast.defender.death, forecast.attacker.death
+    return result
+end
+
+local function strike(context, events, source, target, attack, number, attacking, prepared)
+    local _, _, damage_type, resistance, effective_resistance,
+        time, alignment, alignment_bonus, leadership = table.unpack(prepared.metadata)
+    local chance = prepared.chance
+    local modified_damage = source.slowed and prepared.slowed_damage or prepared.damage
     local roll = context.random:integer(1, 100)
     local hit = roll <= chance
     local damage = 0
@@ -1075,7 +1052,9 @@ local function strike(context, events, source, target, attack, number, attacking
 
     if hit then
         local before = target.hitpoints
-        target.hitpoints = math.max(0, target.hitpoints - modified_damage)
+        local source_after
+        source_after, target.hitpoints = context.combat:impact(source.hitpoints, target.hitpoints,
+            source.max_hitpoints, modified_damage, prepared.heal_percent)
         damage = before - target.hitpoints
         context.objects:set(target.id, "hitpoints", target.hitpoints)
         if has_special(attack, "poison") and not target.poisoned then
@@ -1103,7 +1082,7 @@ local function strike(context, events, source, target, attack, number, attacking
             applied_stun = true
         end
         if has_special(attack, "drain") and source.hitpoints < source.max_hitpoints then
-            drained = math.min(math.floor(damage / 2), source.max_hitpoints - source.hitpoints)
+            drained = source_after - source.hitpoints
             if drained > 0 then
                 source.hitpoints = source.hitpoints + drained
                 context.objects:set(source.id, "hitpoints", source.hitpoints)
@@ -1137,6 +1116,8 @@ local function strike(context, events, source, target, attack, number, attacking
         stunned = applied_stun,
         drained = drained,
         target_hitpoints = target.hitpoints,
+        source_hitpoints = source.hitpoints,
+        range = attack.range,
         source_experience = source.experience or 0,
     }
 end
@@ -1338,6 +1319,7 @@ function combat.snapshot(context)
             name = object.name,
             race = object.race,
             image = object.image,
+            facing = object.facing or "se",
             traits = traits,
             side = object.side,
             is_leader = is_recruiter(object),
@@ -1470,6 +1452,15 @@ function combat.status(context)
             end
         end
     end
+    local side_visuals = {}
+    local colors = { "red", "blue", "green", "purple", "black", "brown", "orange", "white", "teal" }
+    for index, configured in ipairs(children(scenario(context), "side")) do
+        side_visuals[#side_visuals + 1] = {
+            id = configured.id,
+            flag_style = configured.flag_style or "default",
+            color = configured.color or colors[(index - 1) % #colors + 1],
+        }
+    end
     local visible, visible_cells = visibility(context, active_side(context))
     local visible_units = {}
     for _, unit in ipairs(context.objects:all()) do
@@ -1493,6 +1484,7 @@ function combat.status(context)
         recruit_hexes = recruit_hexes,
         recall_units = recall_units,
         recall_options = recall_options,
+        side_visuals = side_visuals,
         villages = context.state:get("villages") or {},
         income = balance.village_income,
         base_income = balance.base_income,
@@ -1696,58 +1688,38 @@ function combat.resolve(context, command)
     assert(context.map:are_adjacent(attacker.position, defender.position),
         "attack requires adjacent units")
 
-    local attack = find_attack(attacker, command.weapon)
-    local retaliation = retaliation_for(context, attacker, defender, attack)
+    local model, attack, retaliation = prepare_battle(context, command, attacker, defender)
     local events = {}
     context.objects:set(attacker.id, "attacks_left", attacker.attacks_left - 1)
     context.objects:set(attacker.id, "movement_points", 0)
     context.objects:set(attacker.id, "resting", false)
-    local berserk = has_special(attack, "berserk")
-        or (retaliation and has_special(retaliation, "berserk"))
-    local attacker_strikes = effective_strikes(attacker, attack)
-    local defender_strikes = retaliation and effective_strikes(defender, retaliation) or 0
-    local rounds = berserk and 30 or math.max(attacker_strikes, defender_strikes)
-    if berserk then attacker_strikes, defender_strikes = rounds, retaliation and rounds or 0 end
-    local charge = weapon_special(attack, "charge")
-    local charge_multiplier = charge and (charge.multiply or 2) or 1
-    local attack_multiplier = charge_multiplier
-    local defense_multiplier = charge_multiplier
-    local attack_absorb = weapon_special(attack, "absorb")
-    local retaliation_absorb = retaliation and weapon_special(retaliation, "absorb")
-    if retaliation_absorb then attack_multiplier = attack_multiplier * retaliation_absorb.multiply end
-    if attack_absorb then defense_multiplier = defense_multiplier * attack_absorb.multiply end
-    local attack_deflect = weapon_special(attack, "deflect")
-    local retaliation_deflect = retaliation and weapon_special(retaliation, "deflect")
-    local retaliation_first = retaliation and has_special(retaliation, "first_strike")
-        and not has_special(attack, "first_strike")
+    local attacker_strikes, defender_strikes = model.attacker.strikes, model.defender.strikes
+    local rounds = math.max(attacker_strikes, defender_strikes)
+    local retaliation_first = model.retaliation_first
 
     for round = 1, rounds do
         if retaliation_first then
             if retaliation and round <= defender_strikes and attacker.hitpoints > 0 then
                 strike(context, events, defender, attacker, retaliation, round, false,
-                    defense_multiplier, (attack.parry or 0)
-                        + (attack_deflect and attack_deflect.sub or 0))
+                    model.defender)
             end
             if attacker.hitpoints == 0 or attacker.petrified then break end
             if round <= attacker_strikes and defender.hitpoints > 0 then
                 strike(context, events, attacker, defender, attack, round, true,
-                    attack_multiplier, (retaliation and retaliation.parry or 0)
-                        + (retaliation_deflect and retaliation_deflect.sub or 0))
+                    model.attacker)
             end
             if defender.hitpoints == 0 then break end
             if defender.petrified then break end
         else
             if round <= attacker_strikes and defender.hitpoints > 0 then
                 strike(context, events, attacker, defender, attack, round, true,
-                    attack_multiplier, (retaliation and retaliation.parry or 0)
-                        + (retaliation_deflect and retaliation_deflect.sub or 0))
+                    model.attacker)
             end
             if defender.hitpoints == 0 then break end
             if defender.petrified then break end
             if retaliation and round <= defender_strikes and attacker.hitpoints > 0 then
                 strike(context, events, defender, attacker, retaliation, round, false,
-                    defense_multiplier, (attack.parry or 0)
-                        + (attack_deflect and attack_deflect.sub or 0))
+                    model.defender)
             end
             if attacker.hitpoints == 0 then break end
             if attacker.petrified then break end
@@ -1804,7 +1776,7 @@ function combat.resolve(context, command)
         strikes = events,
         defeated = defeated_id,
         experience = experience_events,
-        berserk = berserk,
+        berserk = model.berserk,
     }
     local scripted = attack_event(context, attacker, defender, defeated_id)
     local advancements = {}
@@ -1885,132 +1857,79 @@ function combat.resolve(context, command)
     return result
 end
 
-local function in_enemy_zoc(context, object, position, objects, allied_with_object)
-    for _, enemy in ipairs(objects) do
-        if not allied_with_object(enemy.side) and enemy.hitpoints > 0
-            and not enemy.petrified and not enemy.stunned
-            and (enemy.level or 0) > 0
-            and context.map:are_adjacent(enemy.position, position) then
-            return true
-        end
-    end
-    return false
-end
-
 function combat.reachable(context, command)
     assert_playing(context)
     if context.state:get("pending_advancement") then return {} end
-    local object = context.objects:get(command.object)
+    local object = context.objects:get(command.object,
+        { "side", "position", "hitpoints", "petrified", "stunned", "max_moves", "movement_points" },
+        { "movement_costs", "ability" })
     assert(object, "reachable requires an existing object")
     assert(object.hitpoints > 0, "defeated object cannot move")
-    assert(command.inspect or object.side == active_side(context),
-        "object is not on the active side")
+    assert(command.inspect or object.side == active_side(context), "object is not on the active side")
     if object.petrified or object.stunned then return {} end
     local movement_points = command.inspect and object.max_moves or object.movement_points
 
-    -- Fetching objects crosses the Rust/Lua boundary and materializes every
-    -- unit. Keep one snapshot for the whole path search instead of doing that
-    -- once per visited hex through in_enemy_zoc.
-    local objects = context.objects:all()
-    local occupied = {}
-    for _, other in ipairs(objects) do
-        if other.id ~= object.id then
-            occupied[position_key(other.position)] = other
-        end
-    end
-
-    local start_key = position_key(object.position)
+    -- Rules prepare compact constraints once. The world/map and the search loop
+    -- stay in Rust; neither per-hex callbacks nor complete unit snapshots cross.
     local teams = {}
-    local function team(side)
-        if teams[side] == nil then
-            teams[side] = side_team(context, side) or false
-        end
-        return teams[side]
+    for _, side in ipairs(children(context.state:get("scenario", {}, { "side" }), "side")) do
+        teams[side.id] = context.state:get("team:" .. side.id) or side.team_name
     end
-    local object_team = team(object.side)
     local function allied_with_object(side)
-        return side == object.side or object_team and object_team == team(side)
+        return side == object.side or (teams[object.side] ~= nil and teams[side] == teams[object.side])
     end
-    local movement_costs = child(object, "movement_costs")
+    local occupied, occupied_keys, blocked, stop_near = {}, {}, {}, {}
     local ignores_zoc = ability(object, "skirmisher") ~= nil
-    local best = { [start_key] = 0 }
-    local finalized = {}
-    local frontier = {{ position = object.position, cost = 0, path = {} }}
-    local result = {}
-
-    while #frontier > 0 do
-        local best_index = 1
-        for index = 2, #frontier do
-            if frontier[index].cost < frontier[best_index].cost then
-                best_index = index
-            end
-        end
-        local current = table.remove(frontier, best_index)
-        local current_key = position_key(current.position)
-        if not finalized[current_key] then
-            finalized[current_key] = true
-            current.zoc = not ignores_zoc and current_key ~= start_key
-                and in_enemy_zoc(context, object, current.position, objects,
-                    allied_with_object)
-            if current_key ~= start_key and not occupied[current_key] then
-                result[#result + 1] = current
-            end
-
-            if not current.zoc then
-                for _, destination in ipairs(context.map:neighbors(current.position)) do
-                    local key = position_key(destination)
-                    local terrain = context.map:get(destination)
-                    local step_cost = movement_costs[terrain]
-                    local passable = step_cost and step_cost <= object.max_moves
-                    local cost = passable and current.cost < movement_points
-                        and math.min(movement_points, current.cost + step_cost)
-                    local blocker = occupied[key]
-                    if cost and cost <= movement_points
-                        and (not blocker or allied_with_object(blocker.side))
-                        and not finalized[key] and (best[key] == nil or cost < best[key]) then
-                        local path = {}
-                        for index, position in ipairs(current.path) do
-                            path[index] = position
-                        end
-                        path[#path + 1] = destination
-                        best[key] = cost
-                        frontier[#frontier + 1] = {
-                            position = destination,
-                            cost = cost,
-                            path = path,
-                        }
-                    end
+    for _, other in ipairs(context.objects:all({ "side", "position", "hitpoints", "level", "petrified", "stunned" })) do
+        if other.id ~= object.id then
+            occupied[#occupied + 1] = other.position
+            occupied_keys[position_key(other.position)] = true
+            if not allied_with_object(other.side) then
+                blocked[#blocked + 1] = other.position
+                if not ignores_zoc and other.hitpoints > 0 and not other.petrified
+                    and not other.stunned and (other.level or 0) > 0 then
+                    stop_near[#stop_near + 1] = other.position
                 end
             end
         end
     end
+    local result = context.map:search {
+        start = object.position, budget = movement_points, max_step = object.max_moves,
+        costs = child(object, "movement_costs"), occupied = occupied,
+        blocked = blocked, stop_near = stop_near,
+        destination = command.destination, paths = command.paths ~= false,
+    }
 
-    local start_village = village_at(context, object.position)
-    if movement_points > 0 and ability(object, "teleport")
-        and start_village and start_village.side
-        and allied_with_object(start_village.side) then
-        for _, village in ipairs(context.state:get("villages") or {}) do
-            local position = { x = village.x, y = village.y }
-            local key = position_key(position)
-            if allied_with_object(village.side) and not occupied[key]
-                and key ~= start_key and (best[key] == nil or best[key] > 1) then
-                for index = #result, 1, -1 do
-                    if position_key(result[index].position) == key then
-                        table.remove(result, index)
+    -- Teleport is a game rule, retaining its existing direct-village semantics.
+    if movement_points > 0 and ability(object, "teleport") then
+        local villages = context.state:get("villages") or {}
+        local start_key = position_key(object.position)
+        local start_village
+        for _, village in ipairs(villages) do
+            if position_key(village) == start_key then start_village = village; break end
+        end
+        if start_village and start_village.side and allied_with_object(start_village.side) then
+            local best = {}
+            for _, cell in ipairs(result) do best[position_key(cell.position)] = cell.cost end
+            for _, village in ipairs(villages) do
+                local position = { x = village.x, y = village.y }
+                local key = position_key(position)
+                if allied_with_object(village.side) and not occupied_keys[key] and key ~= start_key
+                    and (not command.destination or position_key(command.destination) == key)
+                    and (best[key] == nil or best[key] > 1) then
+                    for index = #result, 1, -1 do
+                        if position_key(result[index].position) == key then table.remove(result, index) end
                     end
+                    result[#result + 1] = {
+                        position = position, cost = 1, teleport = true, zoc = false,
+                        path = command.paths ~= false and {position} or nil,
+                    }
                 end
-                result[#result + 1] = {
-                    position = position, cost = 1, path = {position},
-                    teleport = true, zoc = false,
-                }
-                best[key] = 1
             end
         end
     end
-
     return result
 end
-
 
 function combat.end_turn(context)
     assert_playing(context)
@@ -2072,7 +1991,7 @@ function combat.move(context, command)
     assert_no_pending_choice(context)
     local object = context.objects:get(command.object)
     local destination
-    for _, cell in ipairs(combat.reachable(context, command)) do
+    for _, cell in ipairs(combat.reachable(context, { object = command.object, destination = command.destination, paths = true })) do
         if cell.position.x == command.destination.x
             and cell.position.y == command.destination.y then
             destination = cell
@@ -2082,6 +2001,17 @@ function combat.move(context, command)
     assert(destination, "move destination is unreachable")
 
     local from = object.position
+    -- Facing follows the final path edge; teleportation preserves orientation.
+    if not destination.teleport and #destination.path > 0 then
+        local previous = destination.path[#destination.path - 1] or from
+        local last = destination.path[#destination.path]
+        local dy = (2 * last.y - (last.x % 2 == 0 and 1 or 0))
+            - (2 * previous.y - (previous.x % 2 == 0 and 1 or 0))
+        local facing = last.x == previous.x and (dy < 0 and "n" or "s")
+            or (last.x > previous.x and (dy < 0 and "ne" or "se")
+                or (dy < 0 and "nw" or "sw"))
+        context.objects:set(object.id, "facing", facing)
+    end
     context.objects:set(object.id, "position", command.destination)
     context.objects:set(object.id, "resting", false)
     local movement_points = destination.zoc and 0

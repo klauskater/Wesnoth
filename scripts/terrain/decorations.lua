@@ -131,6 +131,29 @@ local function is_remains(map, x, y)
     return overlay_code(cell(map, x, y)) == "Edb"
 end
 
+local function water_lilies(map, tile, sprites, assets)
+    local stem = tile.terrain == "Ewf" and "water-lilies-flower" or "water-lilies"
+    local small = false
+    for _, neighbor in ipairs(neighbors(tile.x, tile.y)) do
+        local raw = cell(map, neighbor[1], neighbor[2]) or ""
+        local base = base_code(raw)
+        -- NEW:OVERLAY's ADJACENT filter. These assets have no directional
+        -- small variants, so even one matching neighbor uses the small fallback.
+        if base:match("^[CKXGMRADUH]") or starts_with(base, "Ql")
+            or starts_with(base, "Qx") or starts_with(overlay_code(raw), "V")
+        then
+            small = true
+            break
+        end
+    end
+    if small then stem = stem .. "-small" end
+    local name = choose(stem, 5, tile.x, tile.y, "embellishments/" .. stem .. "@V.png")
+    emit(sprites, assets, name, tile.x, tile.y, -86)
+    local sprite = sprites[#sprites]
+    sprite.offset_x = small and -36 or -55
+    sprite.offset_y = sprite.offset_x
+end
+
 return function(map)
     local assets = {}
     local sprites = {}
@@ -138,7 +161,9 @@ return function(map)
     local remains = {}
 
     for _, tile in ipairs(map.tiles) do
-        if tile.terrain == "Efm" then
+        if tile.terrain == "Ewl" or tile.terrain == "Ewf" then
+            water_lilies(map, tile, sprites, assets)
+        elseif tile.terrain == "Efm" then
             emit(
                 sprites,
                 assets,

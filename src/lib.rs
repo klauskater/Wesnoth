@@ -1,9 +1,11 @@
 pub mod adventure;
+pub mod combat;
 #[cfg(feature = "embedded-resources")]
 pub mod embedded;
 pub mod engine;
 pub mod game;
 pub mod map;
+pub mod pathfinding;
 pub mod terrain;
 pub mod terrain_rules;
 pub mod terrain_scene;

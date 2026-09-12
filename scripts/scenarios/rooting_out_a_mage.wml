@@ -13,7 +13,7 @@
 
     [resources]
         map=maps/rooting_out_a_mage.wml
-        map_objects=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+        map_objects=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/bridges.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
         unit_types=units/core-1.18.8.wml
         dialogs=dialogs/rooting_out_a_mage.wml
         rules=rules/simple_ai.lua,rules/basic_combat.lua
@@ -23,12 +23,14 @@
 
     [side]
         id=player
+        flag_style=loyalist
         controller=human
         gold=40
         recruit=Horseman,Bowman,Spearman,Footpad
     [/side]
     [side]
         id=enemy
+        flag_style=undead
         controller=ai
         passive_leader=yes
         gold=120

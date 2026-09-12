@@ -14,6 +14,7 @@ pub struct MapViewport {
     max: Vec2,
     drag: Option<(Vec2, Vec2)>,
     dragged: bool,
+    reserved_width: f32,
 }
 
 impl MapViewport {
@@ -27,6 +28,7 @@ impl MapViewport {
             max,
             drag: None,
             dragged: false,
+            reserved_width: 0.0,
         };
         viewport.fit(screen);
         viewport
@@ -34,13 +36,15 @@ impl MapViewport {
 
     /// Updates the camera and returns a world-space click, never a drag release.
     pub fn update(&mut self, screen: Vec2) -> Option<Vec2> {
+        let screen = self.map_area(screen);
         if is_key_pressed(KeyCode::Home) {
             self.fit(screen);
         }
 
         let cursor = Vec2::from(mouse_position());
+        let inside = Rect::new(0.0, 0.0, screen.x, screen.y).contains(cursor);
         let wheel = mouse_wheel().1;
-        if wheel != 0.0 {
+        if inside && wheel != 0.0 {
             let world_under_cursor = self.unproject(cursor, screen);
             let min_zoom = fit_zoom(self.min, self.max, screen);
             self.target_zoom = (self.target_zoom * ZOOM_STEP.powf(wheel_steps(wheel)))
@@ -48,7 +52,7 @@ impl MapViewport {
             self.zoom_anchor = Some((cursor, world_under_cursor));
         }
 
-        if is_mouse_button_pressed(MouseButton::Left) {
+        if inside && is_mouse_button_pressed(MouseButton::Left) {
             self.target_zoom = self.zoom;
             self.zoom_anchor = None;
             self.drag = Some((cursor, self.center));
@@ -65,7 +69,7 @@ impl MapViewport {
         }
 
         let click = if is_mouse_button_released(MouseButton::Left) && self.drag.is_some() {
-            (!self.dragged).then(|| self.unproject(cursor, screen))
+            (!self.dragged && inside).then(|| self.unproject(cursor, screen))
         } else {
             None
         };
@@ -90,7 +94,25 @@ impl MapViewport {
     }
 
     pub fn project(&self, world: Vec2, screen: Vec2) -> Vec2 {
-        screen / 2.0 + (world - self.center) * self.zoom
+        self.map_area(screen) / 2.0 + (world - self.center) * self.zoom
+    }
+
+    pub fn reserve_panel(&mut self, width: f32) {
+        self.reserved_width = width;
+    }
+
+    fn map_area(&self, screen: Vec2) -> Vec2 {
+        vec2((screen.x - self.reserved_width).max(1.0), screen.y)
+    }
+
+    pub fn focus(&mut self, world: Vec2) {
+        self.center = world;
+        self.zoom_anchor = None;
+    }
+
+    pub fn cancel_gesture(&mut self) {
+        self.drag = None;
+        self.zoom_anchor = None;
     }
 
     pub fn zoom(&self) -> f32 {
@@ -161,5 +183,19 @@ mod tests {
         assert_eq!(wheel_steps(120.0), 1.0);
         let zoom = advance_zoom(10.0, 20.0, 1.0 / 60.0);
         assert!(zoom > 10.0 && zoom < 20.0);
+    }
+
+    #[test]
+    fn panel_reserves_space_for_projection_and_hit_testing() {
+        let screen = vec2(1280.0, 720.0);
+        let mut viewport = MapViewport::new(vec2(-2.0, -1.0), vec2(8.0, 5.0), screen);
+        viewport.reserve_panel(280.0);
+        let area = viewport.map_area(screen);
+        assert_eq!(area, vec2(1000.0, 720.0));
+        let world = vec2(3.0, 2.0);
+        let projected = viewport.project(world, screen);
+        assert_eq!(projected, vec2(500.0, 360.0));
+        assert_eq!(viewport.unproject(projected, area), world);
+        assert!(!Rect::new(0.0, 0.0, area.x, area.y).contains(vec2(1100.0, 300.0)));
     }
 }

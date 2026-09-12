@@ -53,6 +53,10 @@ impl Map {
     }
 
     pub fn neighbors(&self, position: Position) -> Vec<Position> {
+        self.neighbors_iter(position).collect()
+    }
+
+    pub fn neighbors_iter(&self, position: Position) -> impl Iterator<Item = Position> + '_ {
         let diagonal_y = if position.x % 2 == 0 { -1 } else { 1 };
         [
             (-1, 0),
@@ -63,7 +67,7 @@ impl Map {
             (1, diagonal_y),
         ]
         .into_iter()
-        .map(|(x, y)| Position {
+        .map(move |(x, y)| Position {
             x: position.x + x,
             y: position.y + y,
         })
@@ -73,7 +77,6 @@ impl Map {
                 && candidate.x <= self.width as i64
                 && candidate.y <= self.height as i64
         })
-        .collect()
     }
 }
 
@@ -81,14 +84,6 @@ impl Map {
 pub struct Object {
     pub id: String,
     pub properties: BTreeMap<String, Value>,
-}
-
-impl Object {
-    fn snapshot(&self) -> Value {
-        let mut values = self.properties.clone();
-        values.insert("id".to_owned(), Value::String(self.id.clone()));
-        Value::Map(values)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -122,13 +117,14 @@ impl DeterministicRandom {
 
 #[derive(Clone)]
 struct Transaction {
-    world: World,
+    world: Rc<World>,
     random: DeterministicRandom,
 }
 
 #[derive(Clone)]
 pub struct Engine {
-    pub world: World,
+    /// Shared snapshot; transactions copy it only on their first write.
+    pub world: Rc<World>,
     random: DeterministicRandom,
     lua: Rc<Lua>,
     shared_state: Rc<BTreeMap<String, Value>>,
@@ -157,7 +153,7 @@ impl Engine {
         lua.set_named_registry_value("wesnoth.rule_module", module)
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            world,
+            world: Rc::new(world),
             random: DeterministicRandom::new(seed),
             lua: Rc::new(lua),
             shared_state: Rc::new(shared_state),
@@ -178,8 +174,9 @@ impl Engine {
         state: BTreeMap<String, Value>,
         random_state: u64,
     ) {
-        self.world.objects = objects;
-        self.world.state = state;
+        let world = Rc::make_mut(&mut self.world);
+        world.objects = objects;
+        world.state = state;
         self.random.state = random_state;
     }
 
@@ -228,13 +225,30 @@ fn create_context(
     let state = Rc::clone(&transaction);
     objects.set(
         "get",
-        lua.create_function(move |lua, (_self, id): (Table, String)| {
-            let state = state.borrow();
-            match state.world.objects.get(&id) {
-                Some(object) => object.snapshot().to_lua(lua),
-                None => Ok(mlua::Value::Nil),
-            }
-        })?,
+        lua.create_function(
+            move |lua,
+                  (_self, id, fields, children): (
+                Table,
+                String,
+                Option<Vec<String>>,
+                Option<Vec<String>>,
+            )| {
+                let state = state.borrow();
+                match state.world.objects.get(&id) {
+                    Some(object) => {
+                        let table = project(
+                            lua,
+                            &object.properties,
+                            fields.as_deref(),
+                            children.as_deref(),
+                        )?;
+                        table.set("id", object.id.as_str())?;
+                        Ok(mlua::Value::Table(table))
+                    }
+                    None => Ok(mlua::Value::Nil),
+                }
+            },
+        )?,
     )?;
     let state = Rc::clone(&transaction);
     objects.set(
@@ -243,8 +257,7 @@ fn create_context(
             move |_lua, (_self, id, property, value): (Table, String, String, mlua::Value)| {
                 let value = Value::from_lua(value)?;
                 let mut state = state.borrow_mut();
-                let object = state
-                    .world
+                let object = Rc::make_mut(&mut state.world)
                     .objects
                     .get_mut(&id)
                     .ok_or_else(|| mlua::Error::runtime(format!("unknown object: {id}")))?;
@@ -267,8 +280,7 @@ fn create_context(
             if state.world.objects.contains_key(&id) {
                 return Err(mlua::Error::runtime(format!("duplicate object id: {id}")));
             }
-            state
-                .world
+            Rc::make_mut(&mut state.world)
                 .objects
                 .insert(id.clone(), Object { id, properties });
             Ok(())
@@ -278,9 +290,7 @@ fn create_context(
     objects.set(
         "remove",
         lua.create_function(move |_lua, (_self, id): (Table, String)| {
-            state
-                .borrow_mut()
-                .world
+            Rc::make_mut(&mut state.borrow_mut().world)
                 .objects
                 .remove(&id)
                 .map(|_| ())
@@ -290,17 +300,15 @@ fn create_context(
     let state = Rc::clone(&transaction);
     objects.set(
         "all",
-        lua.create_function(move |lua, _self: Table| {
-            Value::List(
-                state
-                    .borrow()
-                    .world
-                    .objects
-                    .values()
-                    .map(Object::snapshot)
-                    .collect(),
-            )
-            .to_lua(lua)
+        lua.create_function(move |lua, (_self, fields, children): (Table, Option<Vec<String>>, Option<Vec<String>>)| {
+            let state = state.borrow();
+            let list = lua.create_table_with_capacity(state.world.objects.len(), 0)?;
+            for (index, object) in state.world.objects.values().enumerate() {
+                let table = project(lua, &object.properties, fields.as_deref(), children.as_deref())?;
+                table.set("id", object.id.as_str())?;
+                list.raw_set(index + 1, table)?;
+            }
+            Ok(list)
         })?,
     )?;
     context.set("objects", objects)?;
@@ -309,25 +317,43 @@ fn create_context(
     let state = Rc::clone(&transaction);
     state_api.set(
         "get",
-        lua.create_function(move |lua, (_self, key): (Table, String)| {
-            let state = state.borrow();
-            state
-                .world
-                .state
-                .get(&key)
-                .or_else(|| shared_state.get(&key))
-                .unwrap_or(&Value::Nil)
-                .to_lua(lua)
-        })?,
+        lua.create_function(
+            move |lua,
+                  (_self, key, fields, children): (
+                Table,
+                String,
+                Option<Vec<String>>,
+                Option<Vec<String>>,
+            )| {
+                let state = state.borrow();
+                let value = state
+                    .world
+                    .state
+                    .get(&key)
+                    .or_else(|| shared_state.get(&key))
+                    .unwrap_or(&Value::Nil);
+                if fields.is_some() || children.is_some() {
+                    let properties = value
+                        .as_map()
+                        .ok_or_else(|| mlua::Error::runtime("projected state must be a map"))?;
+                    Ok(mlua::Value::Table(project(
+                        lua,
+                        properties,
+                        fields.as_deref(),
+                        children.as_deref(),
+                    )?))
+                } else {
+                    value.to_lua(lua)
+                }
+            },
+        )?,
     )?;
     let state = Rc::clone(&transaction);
     state_api.set(
         "set",
         lua.create_function(
             move |_lua, (_self, key, value): (Table, String, mlua::Value)| {
-                state
-                    .borrow_mut()
-                    .world
+                Rc::make_mut(&mut state.borrow_mut().world)
                     .state
                     .insert(key, Value::from_lua(value)?);
                 Ok(())
@@ -336,7 +362,15 @@ fn create_context(
     )?;
     context.set("state", state_api)?;
 
+    crate::combat::install(lua, &context)?;
     let map = lua.create_table()?;
+    let state = Rc::clone(&transaction);
+    map.set(
+        "search",
+        lua.create_function(move |lua, (_self, request): (Table, Table)| {
+            crate::pathfinding::search_lua(lua, &state.borrow().world.map, request)
+        })?,
+    )?;
     let state = Rc::clone(&transaction);
     map.set(
         "get",
@@ -399,6 +433,42 @@ fn create_context(
     Ok(context)
 }
 
+// Serialize only requested fields directly from the borrowed snapshot. No intermediate
+// Value tree, object clone, or full __children export is needed for projections.
+fn project(
+    lua: &Lua,
+    properties: &BTreeMap<String, Value>,
+    fields: Option<&[String]>,
+    children: Option<&[String]>,
+) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    if let Some(fields) = fields {
+        for field in fields {
+            if let Some(value) = properties.get(field) {
+                table.set(field.as_str(), value.to_lua(lua)?)?;
+            }
+        }
+    } else {
+        for (key, value) in properties {
+            if key != "__children" || children.is_none() {
+                table.set(key.as_str(), value.to_lua(lua)?)?;
+            }
+        }
+    }
+    if let Some(children) = children {
+        let selected = lua.create_table()?;
+        if let Some(source) = properties.get("__children").and_then(Value::as_map) {
+            for name in children {
+                if let Some(value) = source.get(name) {
+                    selected.set(name.as_str(), value.to_lua(lua)?)?;
+                }
+            }
+        }
+        table.set("__children", selected)?;
+    }
+    Ok(table)
+}
+
 fn read_position(table: &Table) -> mlua::Result<Position> {
     Ok(Position {
         x: table.get("x")?,
@@ -409,6 +479,84 @@ fn read_position(table: &Table) -> mlua::Result<Position> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queries_share_world_and_copy_on_write_preserves_rollback_and_random() {
+        let world = World {
+            map: Map {
+                width: 1,
+                height: 1,
+                cells: vec!["grassland".into()],
+            },
+            objects: BTreeMap::from([(
+                "unit".into(),
+                Object {
+                    id: "unit".into(),
+                    properties: BTreeMap::from([
+                        ("hp".into(), Value::Integer(10)),
+                        (
+                            "large_unused_data".into(),
+                            Value::String("x".repeat(100_000)),
+                        ),
+                    ]),
+                },
+            )]),
+            state: BTreeMap::new(),
+        };
+        let mut engine = Engine::new(
+            world,
+            42,
+            r#"
+            return {
+                read = function(c)
+                    local unit = c.objects:get("unit", {"hp"})
+                    assert(unit.large_unused_data == nil)
+                    local all = c.objects:all({"hp"})
+                    assert(all[1].large_unused_data == nil)
+                    return unit.hp
+                end,
+                write = function(c, fail)
+                    c.objects:set("unit", "hp", 5)
+                    c.state:set("changed", true)
+                    local random = c.random:integer(1, 100000)
+                    if fail then error("rollback") end
+                    return random
+                end,
+                random = function(c) return c.random:integer(1, 100000) end,
+            }
+        "#
+            .into(),
+        )
+        .unwrap();
+        let original = Rc::clone(&engine.world);
+        let (value, transaction) = engine.evaluate("read", Value::Nil).unwrap();
+        assert_eq!(value, Value::Integer(10));
+        assert!(
+            Rc::ptr_eq(&original, &transaction.world),
+            "read queries must not clone the world"
+        );
+        let random = engine.query("random", Value::Nil).unwrap();
+        assert_eq!(engine.query("write", Value::Bool(false)).unwrap(), random);
+        assert!(Rc::ptr_eq(&original, &engine.world));
+        assert_eq!(
+            engine.query("read", Value::Nil).unwrap(),
+            Value::Integer(10)
+        );
+        assert!(engine.execute("write", Value::Bool(true)).is_err());
+        assert!(Rc::ptr_eq(&original, &engine.world));
+        assert_eq!(engine.query("random", Value::Nil).unwrap(), random);
+        assert_eq!(engine.execute("write", Value::Bool(false)).unwrap(), random);
+        assert!(!Rc::ptr_eq(&original, &engine.world));
+        assert_eq!(
+            original.objects["unit"].properties["hp"],
+            Value::Integer(10)
+        );
+        assert_eq!(
+            engine.world.objects["unit"].properties["hp"],
+            Value::Integer(5)
+        );
+        assert_eq!(engine.world.state["changed"], Value::Bool(true));
+    }
 
     #[test]
     fn detects_hex_neighbors() {

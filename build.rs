@@ -45,8 +45,9 @@ fn main() {
     .unwrap();
 
     let art_root = Path::new(&manifest).join("assets/wesnoth/core-units");
-    let art = fs::read_to_string(art_root.join("index.tsv"))
-        .unwrap()
+    let index = fs::read_to_string(art_root.join("index.tsv")).unwrap()
+        + &fs::read_to_string(art_root.join("directions.tsv")).unwrap();
+    let art = index
         .lines()
         .map(|line| {
             let (id, relative) = line.split_once('\t').unwrap();
@@ -61,6 +62,51 @@ fn main() {
     fs::write(
         Path::new(&env::var("OUT_DIR").unwrap()).join("embedded_unit_art.rs"),
         format!("pub static ALL: &[(&str, &[u8])] = &[\n{art}];\n"),
+    )
+    .unwrap();
+    let battle_root = Path::new(&manifest).join("assets/wesnoth/battle");
+    println!("cargo:rerun-if-changed={}", battle_root.display());
+    let battle_art = fs::read_to_string(battle_root.join("index.tsv"))
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let (id, relative) = line.split_once('\t').unwrap();
+            format!(
+                "({:?}, include_bytes!({:?}).as_slice()),\n",
+                id,
+                battle_root.join(relative).to_string_lossy()
+            )
+        })
+        .collect::<String>();
+    fs::write(
+        Path::new(&env::var("OUT_DIR").unwrap()).join("embedded_battle_art.rs"),
+        format!("pub static ALL: &[(&str, &[u8])] = &[\n{battle_art}];\n"),
+    )
+    .unwrap();
+    let mut village_art = String::new();
+    for directory in ["flags", "terrain/village"] {
+        let root = Path::new(&manifest).join("assets/wesnoth").join(directory);
+        println!("cargo:rerun-if-changed={}", root.display());
+        let mut paths = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            let id = format!(
+                "{directory}/{}",
+                path.file_stem().unwrap().to_str().unwrap()
+            );
+            village_art.push_str(&format!(
+                "({id:?}, include_bytes!({:?}).as_slice()),\n",
+                path.to_string_lossy()
+            ));
+        }
+    }
+    fs::write(
+        Path::new(&env::var("OUT_DIR").unwrap()).join("embedded_village_art.rs"),
+        format!("pub static ALL: &[(&str, &[u8])] = &[\n{village_art}];\n"),
     )
     .unwrap();
 }

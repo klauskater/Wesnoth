@@ -173,7 +173,7 @@ local function best_attack(rules, context, cfg, committed)
             and not unit.petrified and not unit.stunned and not committed[unit.id] then
             local positions = {{ position = unit.position, cost = 0 }}
             if not (cfg.passive_leader == "yes" and is_leader(unit)) then
-                for _, cell in ipairs(rules.reachable(context, { object = unit.id })) do
+                for _, cell in ipairs(rules.reachable(context, { object = unit.id, paths = false })) do
                     positions[#positions + 1] = cell
                 end
             end
@@ -251,7 +251,7 @@ local function best_movement(rules, context, cfg, committed)
         if unit.side == cfg.id and unit.hitpoints > 0 and unit.movement_points > 0
             and not unit.petrified and not unit.stunned and not passive
             and not committed[unit.id] then
-            for _, cell in ipairs(rules.reachable(context, { object = unit.id })) do
+            for _, cell in ipairs(rules.reachable(context, { object = unit.id, paths = false })) do
                 local score = movement_score(rules, context, cfg, unit, cell, enemies, goals)
                 if not best or score > best.score then
                     best = { score = score, unit = unit.id, position = cell.position }

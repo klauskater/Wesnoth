@@ -11,9 +11,15 @@ patterns = {
     "sand": ["beach*.png", "desert*.png"],
     "masks": ["long-*.png", "7hex-*.png"],
     "flat": ["bank-to-ice*.png"],
+    "swamp": ["*.png"],
 }
 for folder, globs in patterns.items():
     (target / folder).mkdir(exist_ok=True)
     for pattern in globs:
         for path in (source / folder).glob(pattern):
             copy2(path, target / folder / path.name)
+
+# The decoration renderer uses a flat asset directory.
+for path in (source / "embellishments").glob("water-lilies*.png"):
+    if not path.stem.endswith("-tile"):
+        copy2(path, target / "decorations" / path.name)

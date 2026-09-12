@@ -61,19 +61,19 @@ impl SpriteRenderer {
         })
     }
 
-    pub fn draw_ground(&self, viewport: &MapViewport, elapsed_ms: u64) {
+    pub fn draw_ground(&self, viewport: &MapViewport, elapsed_ms: u64, tint: Color) {
         for command in &self.ground {
-            self.draw(command, viewport, elapsed_ms);
+            self.draw(command, viewport, elapsed_ms, tint);
         }
     }
 
-    pub fn draw_world(&self, viewport: &MapViewport, elapsed_ms: u64) {
+    pub fn draw_world(&self, viewport: &MapViewport, elapsed_ms: u64, tint: Color) {
         for command in &self.world {
-            self.draw(command, viewport, elapsed_ms);
+            self.draw(command, viewport, elapsed_ms, tint);
         }
     }
 
-    fn draw(&self, command: &DrawCommand, viewport: &MapViewport, elapsed_ms: u64) {
+    fn draw(&self, command: &DrawCommand, viewport: &MapViewport, elapsed_ms: u64, tint: Color) {
         let frame = command.frames.at(elapsed_ms);
         let texture = &self.textures[frame.texture];
         let screen = vec2(screen_width(), screen_height());
@@ -91,7 +91,7 @@ impl SpriteRenderer {
                 texture,
                 position.x,
                 position.y,
-                WHITE,
+                tint,
                 DrawTextureParams {
                     dest_size: Some(size),
                     ..Default::default()
@@ -125,7 +125,7 @@ impl SpriteRenderer {
                         0.0,
                         (point.x - position.x) / size.x,
                         (point.y - position.y) / size.y,
-                        WHITE,
+                        tint,
                     )
                 };
                 let count = points.len() as u16;
@@ -188,49 +188,82 @@ impl PreparedFrames {
     }
 }
 
-
 fn prepare(
     sprites: &[PlacedSprite],
     images: &BTreeMap<String, Image>,
     textures: &mut Vec<Texture2D>,
     cache: &mut BTreeMap<(String, ImageModifiers), usize>,
 ) -> Result<Vec<DrawCommand>, String> {
-    sprites.iter().map(|sprite| {
-        let mut frames = Vec::new();
-        for asset in &sprite.frames.assets {
-            let key = (asset.clone(), sprite.image_mods.clone());
-            let texture = if let Some(index) = cache.get(&key) { *index } else {
-                let image = modify_image(&images[asset], &sprite.image_mods, images)?;
-                let texture = Texture2D::from_image(&image);
-                texture.set_filter(FilterMode::Nearest);
-                let index = textures.len();
-                textures.push(texture);
-                cache.insert(key, index);
-                index
+    sprites
+        .iter()
+        .map(|sprite| {
+            let mut frames = Vec::new();
+            for asset in &sprite.frames.assets {
+                let key = (asset.clone(), sprite.image_mods.clone());
+                let texture = if let Some(index) = cache.get(&key) {
+                    *index
+                } else {
+                    let image = modify_image(&images[asset], &sprite.image_mods, images)?;
+                    let texture = Texture2D::from_image(&image);
+                    texture.set_filter(FilterMode::Nearest);
+                    let index = textures.len();
+                    textures.push(texture);
+                    cache.insert(key, index);
+                    index
+                };
+                frames.push(Frame {
+                    texture,
+                    size: vec2(textures[texture].width(), textures[texture].height())
+                        / REFERENCE_RADIUS,
+                });
+            }
+            let frames = if frames.len() == 1 {
+                PreparedFrames::Still(frames.remove(0))
+            } else {
+                PreparedFrames::Animated {
+                    frames,
+                    frame_ms: sprite.frames.frame_ms,
+                    phase_ms: sprite.frames.phase_ms,
+                }
             };
-            frames.push(Frame { texture,
-                size: vec2(textures[texture].width(), textures[texture].height()) / REFERENCE_RADIUS });
-        }
-        let frames = if frames.len() == 1 { PreparedFrames::Still(frames.remove(0)) }
-            else { PreparedFrames::Animated { frames, frame_ms: sprite.frames.frame_ms, phase_ms: sprite.frames.phase_ms } };
-        Ok(DrawCommand {
-            position: hex_center(sprite.anchor.x, sprite.anchor.y)
-                + vec2(sprite.offset[0], sprite.offset[1]) / REFERENCE_RADIUS,
-            frames,
-            clip_hexes: sprite.clip_hexes.iter().map(|p| hex_center(p.x, p.y)).collect(),
+            Ok(DrawCommand {
+                position: hex_center(sprite.anchor.x, sprite.anchor.y)
+                    + vec2(sprite.offset[0], sprite.offset[1]) / REFERENCE_RADIUS,
+                frames,
+                clip_hexes: sprite
+                    .clip_hexes
+                    .iter()
+                    .map(|p| hex_center(p.x, p.y))
+                    .collect(),
+            })
         })
-    }).collect()
+        .collect()
 }
 
-fn modify_image(source: &Image, mods: &ImageModifiers, images: &BTreeMap<String, Image>) -> Result<Image, String> {
-    let [x, y, width, height] = mods.crop.unwrap_or([0, 0, source.width as u32, source.height as u32]);
-    if x.checked_add(width).is_none_or(|right| right > source.width as u32)
-        || y.checked_add(height).is_none_or(|bottom| bottom > source.height as u32) {
+fn modify_image(
+    source: &Image,
+    mods: &ImageModifiers,
+    images: &BTreeMap<String, Image>,
+) -> Result<Image, String> {
+    let [x, y, width, height] =
+        mods.crop
+            .unwrap_or([0, 0, source.width as u32, source.height as u32]);
+    if x.checked_add(width)
+        .is_none_or(|right| right > source.width as u32)
+        || y.checked_add(height)
+            .is_none_or(|bottom| bottom > source.height as u32)
+    {
         return Err("sprite crop extends outside the source image".into());
     }
-    let masks = mods.masks.iter().map(|id| images.get(id).ok_or_else(|| format!("missing mask: {id}")))
+    let masks = mods
+        .masks
+        .iter()
+        .map(|id| images.get(id).ok_or_else(|| format!("missing mask: {id}")))
         .collect::<Result<Vec<_>, _>>()?;
-    if masks.iter().any(|mask| mask.width as u32 != width || mask.height as u32 != height) {
+    if masks
+        .iter()
+        .any(|mask| mask.width as u32 != width || mask.height as u32 != height)
+    {
         return Err("sprite mask dimensions do not match cropped image".into());
     }
     let mut bytes = Vec::with_capacity((width * height * 4) as usize);
@@ -238,7 +271,7 @@ fn modify_image(source: &Image, mods: &ImageModifiers, images: &BTreeMap<String,
         let start = (((y + row) * source.width as u32 + x) * 4) as usize;
         bytes.extend_from_slice(&source.bytes[start..start + width as usize * 4]);
     }
-    for (i, pixel) in bytes.chunks_exact_mut(4).enumerate() {
+    for (i, pixel) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         // WML ~BLIT unions masks with source-over alpha; ~MASK intersects
         // with the source alpha, then ~O scales the resulting opacity.
         let mut alpha = if masks.is_empty() { 255u32 } else { 0 };
@@ -248,7 +281,11 @@ fn modify_image(source: &Image, mods: &ImageModifiers, images: &BTreeMap<String,
         }
         pixel[3] = (u32::from(pixel[3]).min(alpha) * u32::from(mods.opacity) / 255) as u8;
     }
-    Ok(Image { bytes, width: width as u16, height: height as u16 })
+    Ok(Image {
+        bytes,
+        width: width as u16,
+        height: height as u16,
+    })
 }
 
 #[cfg(test)]
@@ -257,14 +294,39 @@ mod tests {
 
     #[test]
     fn image_operations_follow_wml_crop_mask_and_opacity_order() {
-        let source = Image { width: 2, height: 1, bytes: vec![10,20,30,255,40,50,60,200] };
+        let source = Image {
+            width: 2,
+            height: 1,
+            bytes: vec![10, 20, 30, 255, 40, 50, 60, 200],
+        };
         let images = BTreeMap::from([
-            ("a".into(), Image { width: 1, height: 1, bytes: vec![0,0,0,128] }),
-            ("b".into(), Image { width: 1, height: 1, bytes: vec![0,0,0,128] }),
+            (
+                "a".into(),
+                Image {
+                    width: 1,
+                    height: 1,
+                    bytes: vec![0, 0, 0, 128],
+                },
+            ),
+            (
+                "b".into(),
+                Image {
+                    width: 1,
+                    height: 1,
+                    bytes: vec![0, 0, 0, 128],
+                },
+            ),
         ]);
-        let mut mods = ImageModifiers { crop: Some([1,0,1,1]), masks: vec!["a".into(), "b".into()], opacity: 127 };
-        assert_eq!(modify_image(&source, &mods, &images).unwrap().bytes, [40,50,60,95]);
-        mods.crop = Some([2,0,1,1]);
+        let mut mods = ImageModifiers {
+            crop: Some([1, 0, 1, 1]),
+            masks: vec!["a".into(), "b".into()],
+            opacity: 127,
+        };
+        assert_eq!(
+            modify_image(&source, &mods, &images).unwrap().bytes,
+            [40, 50, 60, 95]
+        );
+        mods.crop = Some([2, 0, 1, 1]);
         assert!(modify_image(&source, &mods, &images).is_err());
     }
 
@@ -272,22 +334,70 @@ mod tests {
     fn campaign_water_frames_and_masks_can_be_prepared_without_a_gpu() {
         use wesnoth_engine::game::Game;
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let game = Game::load(root.join("scripts"), "scenarios/rooting_out_a_mage.wml").unwrap();
-        let scene = TerrainScene::from_lua(game.map(), game.terrain_scripts()).unwrap();
-        let images: BTreeMap<_,_> = scene.assets().iter().map(|(id,path)| {
-            let bytes = std::fs::read(root.join(path)).unwrap();
-            (id.clone(), Image::from_file_with_format(&bytes, Some(ImageFormat::Png)).unwrap())
-        }).collect();
         let mut checked = std::collections::BTreeSet::new();
-        for sprite in scene.ground().iter().filter(|s| s.family == "water") {
-            for asset in &sprite.frames.assets {
-                if checked.insert((asset, sprite.image_mods.clone())) {
-                    let image = modify_image(&images[asset], &sprite.image_mods, &images).unwrap();
-                    assert!(!image.bytes.is_empty());
+        for scenario in [
+            "scenarios/rooting_out_a_mage.wml",
+            "scenarios/the_chase.wml",
+            "scenarios/guarded_castle.wml",
+            "scenarios/return_to_the_village.wml",
+        ] {
+            let game = Game::load(root.join("scripts"), scenario).unwrap();
+            let scene = TerrainScene::from_lua(game.map(), game.terrain_scripts()).unwrap();
+            let images: BTreeMap<_, _> = scene
+                .assets()
+                .iter()
+                .map(|(id, path)| {
+                    let bytes = std::fs::read(root.join(path)).unwrap();
+                    (
+                        id.clone(),
+                        Image::from_file_with_format(&bytes, Some(ImageFormat::Png)).unwrap(),
+                    )
+                })
+                .collect();
+            for sprite in scene.ground().iter().filter(|s| s.family == "water") {
+                for asset in &sprite.frames.assets {
+                    if checked.insert((asset.clone(), sprite.image_mods.clone())) {
+                        let image =
+                            modify_image(&images[asset], &sprite.image_mods, &images).unwrap();
+                        assert!(!image.bytes.is_empty());
+                    }
                 }
             }
         }
         assert!(checked.len() > 38);
+    }
+
+    #[test]
+    fn water_atlas_stays_continuous_across_the_clients_staggered_columns() {
+        use wesnoth_engine::{
+            engine::Map,
+            terrain_scene::{TerrainScene, TerrainScript},
+        };
+        let scene = TerrainScene::from_lua(
+            &Map {
+                width: 12,
+                height: 4,
+                cells: vec!["Ww".into(); 48],
+            },
+            &[TerrainScript {
+                family: "water".into(),
+                codes: vec!["Ww".into()],
+                source: include_str!("../../../scripts/terrain/water.lua").into(),
+            }],
+        )
+        .unwrap();
+        let mut crops = std::collections::BTreeSet::new();
+        for sprite in scene.ground().iter().filter(|s| s.local_order == -999) {
+            let crop = sprite.image_mods.crop.unwrap();
+            crops.insert(crop);
+            let center = hex_center(sprite.anchor.x, sprite.anchor.y) * REFERENCE_RADIUS;
+            // The original sheet repeats every 324x144 pixels, with an 18x36
+            // overlap. Adjacent hexes must sample the same continuous plane.
+            assert_eq!((crop[0] as i64 - center.x as i64).rem_euclid(324), 0);
+            assert_eq!((crop[1] as i64 - center.y as i64).rem_euclid(144), 0);
+            assert_eq!(&crop[2..], &[72, 72]);
+        }
+        assert_eq!(crops.len(), 12);
     }
 
     #[test]

@@ -1,4 +1,6 @@
 [map_object]
     id=castle
+    codes=castle,keep,Ch,Kh,Chr,Khr,Chw,Ce,Ke,Cvr,Kvr,Cud,Kud
+    renderer=terrain/castles.lua
     color=8d8170
 [/map_object]

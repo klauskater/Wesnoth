@@ -1,0 +1,6 @@
+[map_object]
+    id=bridges
+    codes=Bw|,Bw/,Bw\,Bsb|,Bsb/,Bsb\
+    color=8c7652
+    renderer=terrain/bridges.lua
+[/map_object]

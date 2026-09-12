@@ -1673,3 +1673,44 @@ fn value_list_for_test<'a>(value: &'a Value, key: &str) -> &'a [Value] {
         _ => panic!("missing list {key}"),
     }
 }
+
+#[test]
+fn forecasts_cover_real_outcomes_and_do_not_consume_rng() {
+    for (attacker, defender, weapon) in [("alice", "bob", "sword"), ("alice", "bob", "bow")] {
+        let mut battle = game();
+        battle.acknowledge_dialog().unwrap();
+        let before = battle.save().unwrap();
+        let request = attack_units(attacker, defender, weapon);
+        let forecast = battle.query("preview_attack", request.clone()).unwrap();
+        assert_eq!(battle.save().unwrap(), before);
+        let events = battle.execute("resolve", request).unwrap();
+        let Value::List(strikes) = events[0].get("strikes").unwrap() else {
+            panic!()
+        };
+        for (unit, key) in [
+            (attacker, "attacker_outcomes"),
+            (defender, "defender_outcomes"),
+        ] {
+            let final_hp = strikes
+                .iter()
+                .rev()
+                .find_map(|s| {
+                    if s.get("source").and_then(Value::as_str) == Some(unit) {
+                        s.get("source_hitpoints").and_then(Value::as_i64)
+                    } else if s.get("target").and_then(Value::as_str) == Some(unit) {
+                        s.get("target_hitpoints").and_then(Value::as_i64)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            let Value::List(rows) = forecast.get(key).unwrap().get("distribution").unwrap() else {
+                panic!()
+            };
+            assert!(
+                rows.iter()
+                    .any(|r| r.get("hp").and_then(Value::as_i64) == Some(final_hp))
+            );
+        }
+    }
+}

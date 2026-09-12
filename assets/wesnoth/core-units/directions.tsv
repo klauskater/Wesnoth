@@ -1,0 +1,270 @@
+Blood Bat:n	units/bats/bloodbat-ne-3.png
+Blood Bat:ne	units/bats/bloodbat-ne-3.png
+Blood Bat:nw	units/bats/bloodbat-ne-3.png
+Blood Bat:s	units/bats/bloodbat-se-3.png
+Blood Bat:se	units/bats/bloodbat-se-3.png
+Blood Bat:sw	units/bats/bloodbat-se-3.png
+Bowman:n	units/human-loyalists/bowman-ne.png
+Bowman:ne	units/human-loyalists/bowman-ne.png
+Bowman:nw	units/human-loyalists/bowman-ne.png
+Bowman:s	units/human-loyalists/bowman.png
+Bowman:se	units/human-loyalists/bowman.png
+Bowman:sw	units/human-loyalists/bowman.png
+Dragonfly:n	units/monsters/dragonfly/young/dragonfly-n-shadow.png
+Dragonfly:ne	units/monsters/dragonfly/young/dragonfly-n-shadow.png
+Dragonfly:nw	units/monsters/dragonfly/young/dragonfly-n-shadow.png
+Dragonfly:s	units/monsters/dragonfly/young/dragonfly-shadow.png
+Dragonfly:se	units/monsters/dragonfly/young/dragonfly-shadow.png
+Dragonfly:sw	units/monsters/dragonfly/young/dragonfly-shadow.png
+Dread Bat:n	units/bats/dreadbat-ne-3.png
+Dread Bat:ne	units/bats/dreadbat-ne-3.png
+Dread Bat:nw	units/bats/dreadbat-ne-3.png
+Dread Bat:s	units/bats/dreadbat-se-3.png
+Dread Bat:se	units/bats/dreadbat-se-3.png
+Dread Bat:sw	units/bats/dreadbat-se-3.png
+Dune Firetrooper:n	units/dunefolk/burner/firetrooper.png
+Dune Firetrooper:ne	units/dunefolk/burner/firetrooper.png
+Dune Firetrooper:nw	units/dunefolk/burner/firetrooper.png
+Dune Firetrooper:s	units/dunefolk/burner/firetrooper.png
+Dune Firetrooper:se	units/dunefolk/burner/firetrooper.png
+Dune Firetrooper:sw	units/dunefolk/burner/firetrooper.png
+Dune Marauder:n	units/dunefolk/rider/marauder.png
+Dune Marauder:ne	units/dunefolk/rider/marauder.png
+Dune Marauder:nw	units/dunefolk/rider/marauder.png
+Dune Marauder:s	units/dunefolk/rider/marauder.png
+Dune Marauder:se	units/dunefolk/rider/marauder.png
+Dune Marauder:sw	units/dunefolk/rider/marauder.png
+Dune Raider:n	units/dunefolk/rider/raider.png
+Dune Raider:ne	units/dunefolk/rider/raider.png
+Dune Raider:nw	units/dunefolk/rider/raider.png
+Dune Raider:s	units/dunefolk/rider/raider.png
+Dune Raider:se	units/dunefolk/rider/raider.png
+Dune Raider:sw	units/dunefolk/rider/raider.png
+Dune Skirmisher:n	units/dunefolk/skirmisher/skirmisher-ne.png
+Dune Skirmisher:ne	units/dunefolk/skirmisher/skirmisher-ne.png
+Dune Skirmisher:nw	units/dunefolk/skirmisher/skirmisher-ne.png
+Dune Skirmisher:s	units/dunefolk/skirmisher/skirmisher.png
+Dune Skirmisher:se	units/dunefolk/skirmisher/skirmisher.png
+Dune Skirmisher:sw	units/dunefolk/skirmisher/skirmisher.png
+Dwarvish Dragonguard:n	units/dwarves/dragonguard/dragonguard-ne-bob1.png
+Dwarvish Dragonguard:ne	units/dwarves/dragonguard/dragonguard-ne-bob1.png
+Dwarvish Dragonguard:nw	units/dwarves/dragonguard/dragonguard-ne-bob1.png
+Dwarvish Dragonguard:s	units/dwarves/dragonguard/dragonguard-se-bob1.png
+Dwarvish Dragonguard:se	units/dwarves/dragonguard/dragonguard-se-bob1.png
+Dwarvish Dragonguard:sw	units/dwarves/dragonguard/dragonguard-se-bob1.png
+Dwarvish Fighter:n	units/dwarves/fighter-ne-bob1.png
+Dwarvish Fighter:ne	units/dwarves/fighter-ne-bob1.png
+Dwarvish Fighter:nw	units/dwarves/fighter-ne-bob1.png
+Dwarvish Fighter:s	units/dwarves/fighter-se-bob1.png
+Dwarvish Fighter:se	units/dwarves/fighter-se-bob1.png
+Dwarvish Fighter:sw	units/dwarves/fighter-se-bob1.png
+Dwarvish Lord:n	units/dwarves/lord-ne-bob1.png
+Dwarvish Lord:ne	units/dwarves/lord-ne-bob1.png
+Dwarvish Lord:nw	units/dwarves/lord-ne-bob1.png
+Dwarvish Lord:s	units/dwarves/lord-se-bob1.png
+Dwarvish Lord:se	units/dwarves/lord-se-bob1.png
+Dwarvish Lord:sw	units/dwarves/lord-se-bob1.png
+Dwarvish Steelclad:n	units/dwarves/steelclad-ne-bob1.png
+Dwarvish Steelclad:ne	units/dwarves/steelclad-ne-bob1.png
+Dwarvish Steelclad:nw	units/dwarves/steelclad-ne-bob1.png
+Dwarvish Steelclad:s	units/dwarves/steelclad-se-bob1.png
+Dwarvish Steelclad:se	units/dwarves/steelclad-se-bob1.png
+Dwarvish Steelclad:sw	units/dwarves/steelclad-se-bob1.png
+Dwarvish Thunderer:n	units/dwarves/thunderer/thunderer-ne-bob1.png
+Dwarvish Thunderer:ne	units/dwarves/thunderer/thunderer-ne-bob1.png
+Dwarvish Thunderer:nw	units/dwarves/thunderer/thunderer-ne-bob1.png
+Dwarvish Thunderer:s	units/dwarves/thunderer/thunderer-se-bob1.png
+Dwarvish Thunderer:se	units/dwarves/thunderer/thunderer-se-bob1.png
+Dwarvish Thunderer:sw	units/dwarves/thunderer/thunderer-se-bob1.png
+Dwarvish Thunderguard:n	units/dwarves/thunderguard/thunderguard-ne-bob1.png
+Dwarvish Thunderguard:ne	units/dwarves/thunderguard/thunderguard-ne-bob1.png
+Dwarvish Thunderguard:nw	units/dwarves/thunderguard/thunderguard-ne-bob1.png
+Dwarvish Thunderguard:s	units/dwarves/thunderguard/thunderguard-se-bob1.png
+Dwarvish Thunderguard:se	units/dwarves/thunderguard/thunderguard-se-bob1.png
+Dwarvish Thunderguard:sw	units/dwarves/thunderguard/thunderguard-se-bob1.png
+Ghost:n	units/undead-spirit/ghost-n-2.png
+Ghost:ne	units/undead-spirit/ghost-n-2.png
+Ghost:nw	units/undead-spirit/ghost-n-2.png
+Ghost:s	units/undead-spirit/ghost-s-2.png
+Ghost:se	units/undead-spirit/ghost-s-2.png
+Ghost:sw	units/undead-spirit/ghost-s-2.png
+Giant Scorpion:n	units/monsters/scorpion/scorpion-ne.png
+Giant Scorpion:ne	units/monsters/scorpion/scorpion-ne.png
+Giant Scorpion:nw	units/monsters/scorpion/scorpion-ne.png
+Giant Scorpion:s	units/monsters/scorpion/scorpion.png
+Giant Scorpion:se	units/monsters/scorpion/scorpion.png
+Giant Scorpion:sw	units/monsters/scorpion/scorpion.png
+Goblin Impaler:n	units/goblins/impaler-ne.png
+Goblin Impaler:ne	units/goblins/impaler-ne.png
+Goblin Impaler:nw	units/goblins/impaler-ne.png
+Goblin Impaler:s	units/goblins/impaler.png
+Goblin Impaler:se	units/goblins/impaler.png
+Goblin Impaler:sw	units/goblins/impaler.png
+Goblin Rouser:n	units/goblins/rouser-ne.png
+Goblin Rouser:ne	units/goblins/rouser-ne.png
+Goblin Rouser:nw	units/goblins/rouser-ne.png
+Goblin Rouser:s	units/goblins/rouser.png
+Goblin Rouser:se	units/goblins/rouser.png
+Goblin Rouser:sw	units/goblins/rouser.png
+Goblin Spearman:n	units/goblins/spearman-ne.png
+Goblin Spearman:ne	units/goblins/spearman-ne.png
+Goblin Spearman:nw	units/goblins/spearman-ne.png
+Goblin Spearman:s	units/goblins/spearman.png
+Goblin Spearman:se	units/goblins/spearman.png
+Goblin Spearman:sw	units/goblins/spearman.png
+Grand Dragonfly:n	units/monsters/dragonfly/grand/dragonfly-n-shadow.png
+Grand Dragonfly:ne	units/monsters/dragonfly/grand/dragonfly-n-shadow.png
+Grand Dragonfly:nw	units/monsters/dragonfly/grand/dragonfly-n-shadow.png
+Grand Dragonfly:s	units/monsters/dragonfly/grand/dragonfly-shadow.png
+Grand Dragonfly:se	units/monsters/dragonfly/grand/dragonfly-shadow.png
+Grand Dragonfly:sw	units/monsters/dragonfly/grand/dragonfly-shadow.png
+Horseman:n	units/human-loyalists/horseman/horseman-ne-bob1.png
+Horseman:ne	units/human-loyalists/horseman/horseman-ne-bob1.png
+Horseman:nw	units/human-loyalists/horseman/horseman-ne-bob1.png
+Horseman:s	units/human-loyalists/horseman/horseman-se-bob1.png
+Horseman:se	units/human-loyalists/horseman/horseman-se-bob1.png
+Horseman:sw	units/human-loyalists/horseman/horseman-se-bob1.png
+Knight:n	units/human-loyalists/knight/knight-ne-bob1.png
+Knight:ne	units/human-loyalists/knight/knight-ne-bob1.png
+Knight:nw	units/human-loyalists/knight/knight-ne-bob1.png
+Knight:s	units/human-loyalists/knight/knight-se-bob1.png
+Knight:se	units/human-loyalists/knight/knight-se-bob1.png
+Knight:sw	units/human-loyalists/knight/knight-se-bob1.png
+Orcish Archer:n	units/orcs/archer-ne-bob-2.png
+Orcish Archer:ne	units/orcs/archer-ne-bob-2.png
+Orcish Archer:nw	units/orcs/archer-ne-bob-2.png
+Orcish Archer:s	units/orcs/archer-bob-1.png
+Orcish Archer:se	units/orcs/archer-bob-1.png
+Orcish Archer:sw	units/orcs/archer-bob-1.png
+Orcish Assassin:n	units/orcs/assassin-heaving-1.png
+Orcish Assassin:ne	units/orcs/assassin-heaving-1.png
+Orcish Assassin:nw	units/orcs/assassin-heaving-1.png
+Orcish Assassin:s	units/orcs/assassin-heaving-1.png
+Orcish Assassin:se	units/orcs/assassin-heaving-1.png
+Orcish Assassin:sw	units/orcs/assassin-heaving-1.png
+Orcish Grunt:n	units/orcs/grunt-stand-ne-1.png
+Orcish Grunt:ne	units/orcs/grunt-stand-ne-1.png
+Orcish Grunt:nw	units/orcs/grunt-stand-ne-1.png
+Orcish Grunt:s	units/orcs/grunt-stand-se-1.png
+Orcish Grunt:se	units/orcs/grunt-stand-se-1.png
+Orcish Grunt:sw	units/orcs/grunt-stand-se-1.png
+Revenant:n	units/undead-skeletal/revenant/revenant-ne-bob1.png
+Revenant:ne	units/undead-skeletal/revenant/revenant-ne-bob1.png
+Revenant:nw	units/undead-skeletal/revenant/revenant-ne-bob1.png
+Revenant:s	units/undead-skeletal/revenant/revenant-se-bob1.png
+Revenant:se	units/undead-skeletal/revenant/revenant-se-bob1.png
+Revenant:sw	units/undead-skeletal/revenant/revenant-se-bob1.png
+Sand Scuttler:n	units/monsters/scorpion/sand-scuttler-ne.png
+Sand Scuttler:ne	units/monsters/scorpion/sand-scuttler-ne.png
+Sand Scuttler:nw	units/monsters/scorpion/sand-scuttler-ne.png
+Sand Scuttler:s	units/monsters/scorpion/sand-scuttler.png
+Sand Scuttler:se	units/monsters/scorpion/sand-scuttler.png
+Sand Scuttler:sw	units/monsters/scorpion/sand-scuttler.png
+Saurian Ambusher:n	units/saurians/ambusher/ambusher-ne-bob1.png
+Saurian Ambusher:ne	units/saurians/ambusher/ambusher-ne-bob1.png
+Saurian Ambusher:nw	units/saurians/ambusher/ambusher-ne-bob1.png
+Saurian Ambusher:s	units/saurians/ambusher/ambusher-se-bob1.png
+Saurian Ambusher:se	units/saurians/ambusher/ambusher-se-bob1.png
+Saurian Ambusher:sw	units/saurians/ambusher/ambusher-se-bob1.png
+Saurian Augur:n	units/saurians/augur/augur-ne-bob1.png
+Saurian Augur:ne	units/saurians/augur/augur-ne-bob1.png
+Saurian Augur:nw	units/saurians/augur/augur-ne-bob1.png
+Saurian Augur:s	units/saurians/augur/augur-se-bob1.png
+Saurian Augur:se	units/saurians/augur/augur-se-bob1.png
+Saurian Augur:sw	units/saurians/augur/augur-se-bob1.png
+Saurian Flanker:n	units/saurians/flanker/flanker-ne-bob1.png
+Saurian Flanker:ne	units/saurians/flanker/flanker-ne-bob1.png
+Saurian Flanker:nw	units/saurians/flanker/flanker-ne-bob1.png
+Saurian Flanker:s	units/saurians/flanker/flanker-se-bob1.png
+Saurian Flanker:se	units/saurians/flanker/flanker-se-bob1.png
+Saurian Flanker:sw	units/saurians/flanker/flanker-se-bob1.png
+Saurian Javelineer:n	units/saurians/javelineer/javelineer-ne-bob1.png
+Saurian Javelineer:ne	units/saurians/javelineer/javelineer-ne-bob1.png
+Saurian Javelineer:nw	units/saurians/javelineer/javelineer-ne-bob1.png
+Saurian Javelineer:s	units/saurians/javelineer/javelineer-se-bob1.png
+Saurian Javelineer:se	units/saurians/javelineer/javelineer-se-bob1.png
+Saurian Javelineer:sw	units/saurians/javelineer/javelineer-se-bob1.png
+Saurian Oracle:n	units/saurians/oracle/oracle-ne-bob1.png
+Saurian Oracle:ne	units/saurians/oracle/oracle-ne-bob1.png
+Saurian Oracle:nw	units/saurians/oracle/oracle-ne-bob1.png
+Saurian Oracle:s	units/saurians/oracle/oracle-se-bob1.png
+Saurian Oracle:se	units/saurians/oracle/oracle-se-bob1.png
+Saurian Oracle:sw	units/saurians/oracle/oracle-se-bob1.png
+Saurian Prophet:n	units/saurians/prophet/prophet-ne-bob1.png
+Saurian Prophet:ne	units/saurians/prophet/prophet-ne-bob1.png
+Saurian Prophet:nw	units/saurians/prophet/prophet-ne-bob1.png
+Saurian Prophet:s	units/saurians/prophet/prophet-se-bob1.png
+Saurian Prophet:se	units/saurians/prophet/prophet-se-bob1.png
+Saurian Prophet:sw	units/saurians/prophet/prophet-se-bob1.png
+Saurian Seer:n	units/saurians/seer/seer-ne-bob1.png
+Saurian Seer:ne	units/saurians/seer/seer-ne-bob1.png
+Saurian Seer:nw	units/saurians/seer/seer-ne-bob1.png
+Saurian Seer:s	units/saurians/seer/seer-se-bob1.png
+Saurian Seer:se	units/saurians/seer/seer-se-bob1.png
+Saurian Seer:sw	units/saurians/seer/seer-se-bob1.png
+Saurian Skirmisher:n	units/saurians/skirmisher/skirmisher-ne-bob1.png
+Saurian Skirmisher:ne	units/saurians/skirmisher/skirmisher-ne-bob1.png
+Saurian Skirmisher:nw	units/saurians/skirmisher/skirmisher-ne-bob1.png
+Saurian Skirmisher:s	units/saurians/skirmisher/skirmisher-se-bob1.png
+Saurian Skirmisher:se	units/saurians/skirmisher/skirmisher-se-bob1.png
+Saurian Skirmisher:sw	units/saurians/skirmisher/skirmisher-se-bob1.png
+Saurian Soothsayer:n	units/saurians/soothsayer/soothsayer-ne-bob1.png
+Saurian Soothsayer:ne	units/saurians/soothsayer/soothsayer-ne-bob1.png
+Saurian Soothsayer:nw	units/saurians/soothsayer/soothsayer-ne-bob1.png
+Saurian Soothsayer:s	units/saurians/soothsayer/soothsayer-se-bob1.png
+Saurian Soothsayer:se	units/saurians/soothsayer/soothsayer-se-bob1.png
+Saurian Soothsayer:sw	units/saurians/soothsayer/soothsayer-se-bob1.png
+Saurian Spearthrower:n	units/saurians/spearthrower/spearthrower-ne-bob1.png
+Saurian Spearthrower:ne	units/saurians/spearthrower/spearthrower-ne-bob1.png
+Saurian Spearthrower:nw	units/saurians/spearthrower/spearthrower-ne-bob1.png
+Saurian Spearthrower:s	units/saurians/spearthrower/spearthrower-se-bob1.png
+Saurian Spearthrower:se	units/saurians/spearthrower/spearthrower-se-bob1.png
+Saurian Spearthrower:sw	units/saurians/spearthrower/spearthrower-se-bob1.png
+Shadow:n	units/undead-spirit/shadow-n-2.png
+Shadow:ne	units/undead-spirit/shadow-n-2.png
+Shadow:nw	units/undead-spirit/shadow-n-2.png
+Shadow:s	units/undead-spirit/shadow-s-2.png
+Shadow:se	units/undead-spirit/shadow-s-2.png
+Shadow:sw	units/undead-spirit/shadow-s-2.png
+Shadow Jumping Spider:n	units/monsters/jumping-spider-ne.png
+Shadow Jumping Spider:ne	units/monsters/jumping-spider-ne.png
+Shadow Jumping Spider:nw	units/monsters/jumping-spider-ne.png
+Shadow Jumping Spider:s	units/monsters/jumping-spider.png
+Shadow Jumping Spider:se	units/monsters/jumping-spider.png
+Shadow Jumping Spider:sw	units/monsters/jumping-spider.png
+Skeleton:n	units/undead-skeletal/skeleton/skeleton-ne-bob1.png
+Skeleton:ne	units/undead-skeletal/skeleton/skeleton-ne-bob1.png
+Skeleton:nw	units/undead-skeletal/skeleton/skeleton-ne-bob1.png
+Skeleton:s	units/undead-skeletal/skeleton/skeleton-se-bob1.png
+Skeleton:se	units/undead-skeletal/skeleton/skeleton-se-bob1.png
+Skeleton:sw	units/undead-skeletal/skeleton/skeleton-se-bob1.png
+Spearman:n	units/human-loyalists/spearman-stand-n-1.png
+Spearman:ne	units/human-loyalists/spearman-stand-n-1.png
+Spearman:nw	units/human-loyalists/spearman-stand-n-1.png
+Spearman:s	units/human-loyalists/spearman-stand-s-1.png
+Spearman:se	units/human-loyalists/spearman-stand-s-1.png
+Spearman:sw	units/human-loyalists/spearman-stand-s-1.png
+Swamp Lizard:n	units/monsters/croc/crocodile-ne.png
+Swamp Lizard:ne	units/monsters/croc/crocodile-ne.png
+Swamp Lizard:nw	units/monsters/croc/crocodile-ne.png
+Swamp Lizard:s	units/monsters/croc/crocodile-no-tail.png
+Swamp Lizard:se	units/monsters/croc/crocodile-no-tail.png
+Swamp Lizard:sw	units/monsters/croc/crocodile-no-tail.png
+Troll Whelp:n	units/trolls/whelp-ne.png
+Troll Whelp:ne	units/trolls/whelp-ne.png
+Troll Whelp:nw	units/trolls/whelp-ne.png
+Troll Whelp:s	units/trolls/whelp.png
+Troll Whelp:se	units/trolls/whelp.png
+Troll Whelp:sw	units/trolls/whelp.png
+Vampire Bat:n	units/bats/bat-ne-3.png
+Vampire Bat:ne	units/bats/bat-ne-3.png
+Vampire Bat:nw	units/bats/bat-ne-3.png
+Vampire Bat:s	units/bats/bat-se-3.png
+Vampire Bat:se	units/bats/bat-se-3.png
+Vampire Bat:sw	units/bats/bat-se-3.png
+Water Serpent:n	units/monsters/water-serpent-n.png
+Water Serpent:ne	units/monsters/water-serpent-n.png
+Water Serpent:nw	units/monsters/water-serpent-n.png
+Water Serpent:s	units/monsters/water-serpent.png
+Water Serpent:se	units/monsters/water-serpent.png
+Water Serpent:sw	units/monsters/water-serpent.png
