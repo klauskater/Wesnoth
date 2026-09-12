@@ -28,9 +28,15 @@ function combat.are_enemies(context, first, second)
     return not allied(context, first, second)
 end
 
+local function enabled(value)
+    return value == true or value == "yes" or value == "true" or value == 1
+end
+
 local function weapon_special(attack, id)
+    if not attack then return nil end
     for _, special in ipairs(children(attack, "special")) do
-        if special.id == id then return special end
+        local aliases = {drains = "drain", petrifies = "petrify", firststrike = "first_strike"}
+        if special.id == id or (aliases[special.kind] or special.kind) == id then return special end
     end
 end
 
@@ -477,6 +483,14 @@ local function visible_to(context, side_id, object)
     return visible == nil or visible[position_key(object.position)] ~= nil
 end
 
+function combat.visible_unit_ids(context, side)
+    local result = {}
+    for _, unit in ipairs(context.objects:all()) do
+        if visible_to(context, side, unit) then result[#result + 1] = unit.id end
+    end
+    return result
+end
+
 local function sighted_by_side(context, side_id, object)
     local radius = side_config(context, side_id).vision_radius
         or scenario(context).vision_radius or 2
@@ -812,6 +826,7 @@ end
 local function alignment_modifier(alignment, lawful_bonus)
     if alignment == "lawful" then return lawful_bonus end
     if alignment == "chaotic" then return -lawful_bonus end
+    if alignment == "liminal" then return -math.abs(lawful_bonus) end
     return 0
 end
 
@@ -864,38 +879,275 @@ local function backstab_active(context, source, target, attack, attacking)
     return false
 end
 
-local function attack_stats(context, source, target, attack, attacking, slowed)
+-- Numeric special attributes are interpreted by kind, not by the display id.
+local legacy_specials = {
+    magical={kind="chance_to_hit",value=70},
+    marksman={kind="chance_to_hit",value=60,cumulative="yes",active_on="offense"},
+    charge={kind="damage",multiply=2,apply_to="both",active_on="offense"},
+    backstab={kind="damage",multiply=2,active_on="offense"},
+    absorb={kind="damage",apply_to="opponent"},
+    deflect={kind="chance_to_hit",apply_to="opponent"},
+    drain={kind="drains",value=50}, first_strike={kind="firststrike"},
+    petrify={kind="petrifies"},
+}
+local function special_attributes(original)
+    local result = {}
+    for key, value in pairs(not original.kind and legacy_specials[original.id] or {}) do result[key]=value end
+    for key, value in pairs(original) do result[key]=value end
+    result.kind = result.kind or result.id
+    return result
+end
+
+local function listed(value, choices)
+    for item in tostring(choices):gmatch("[^,]+") do
+        item = item:match("^%s*(.-)%s*$")
+        if tostring(value) == item then return true end
+        local lo, hi = item:match("^(%-?%d+)%-(%-?%d+)$")
+        if lo and tonumber(value) and tonumber(value) >= tonumber(lo) and tonumber(value) <= tonumber(hi) then
+            return true
+        end
+    end
+    return false
+end
+
+local function weapon_filter(weapon, filter)
+    if not weapon then return false end
+    local aliases = {name="id",type="damage_type",base_type="damage_type",number="strikes"}
+    local result = true
+    for key, value in pairs(filter) do
+        if key ~= "__children" then
+            assert(key ~= "formula", "weapon filter formula requires WFL evaluation")
+            if key == "special" or key == "special_id" or key == "special_type" then
+                local found=false
+                for _, special in ipairs(children(weapon,"special")) do
+                    found=found or listed(key == "special_type" and special_attributes(special).kind or special.id,value)
+                end
+                result=result and found
+            else
+                result=result and listed(weapon[aliases[key] or key],value)
+            end
+        end
+    end
+    for _, f in ipairs(children(filter,"and")) do result=result and weapon_filter(weapon,f) end
+    for _, f in ipairs(children(filter,"or")) do result=result or weapon_filter(weapon,f) end
+    for _, f in ipairs(children(filter,"not")) do result=result and not weapon_filter(weapon,f) end
+    return result
+end
+
+local function unit_filter(context, unit, weapon, filter)
+    if not unit then return false end
+    local result=true
+    for key,value in pairs(filter) do
+        if key ~= "__children" then
+            assert(key ~= "formula" and key ~= "lua_function", "unit filter requires a formula/script evaluator")
+            if key == "status" then
+                local found=false
+                for status in tostring(value):gmatch("[^,%s]+") do found=found or enabled(unit[status]) end
+                result=result and found
+            elseif key == "canrecruit" then
+                result=result and (is_recruiter(unit) == enabled(value))
+            elseif key == "x" or key == "y" then
+                result=result and listed(unit.position[key],value)
+            else
+                result=result and listed(unit[key],value)
+            end
+        end
+    end
+    for name, filters in pairs(filter.__children or {}) do
+        for _, f in ipairs(filters) do
+            if name == "filter_weapon" then result=result and weapon_filter(weapon,f)
+            elseif name ~= "and" and name ~= "or" and name ~= "not" then
+                error("unit filter child is not implemented: " .. name)
+            end
+        end
+    end
+    for _, f in ipairs(children(filter,"and")) do result=result and unit_filter(context,unit,weapon,f) end
+    for _, f in ipairs(children(filter,"or")) do result=result or unit_filter(context,unit,weapon,f) end
+    for _, f in ipairs(children(filter,"not")) do result=result and not unit_filter(context,unit,weapon,f) end
+    return result
+end
+
+local function matching_specials(context, source, target, weapon, opponent, kind, attacking)
+    local result = {}
+    local function collect(owner_weapon, own)
+        if not owner_weapon then return end
+        for _, original in ipairs(children(owner_weapon, "special")) do
+            local special = special_attributes(original)
+            local owner_attacks = own and attacking or not own and not attacking
+            local active = special.active_on or "both"
+            local applies = special.apply_to or "self"
+            local affects = applies == "both" or (applies == "self" and own)
+                or (applies == "opponent" and not own)
+                or (applies == "attacker" and attacking) or (applies == "defender" and not attacking)
+            if special.kind == kind and affects
+                and (active == "both" or active == (owner_attacks and "offense" or "defense"))
+                and (special.id ~= "backstab" or backstab_active(context,
+                    own and source or target, own and target or source, owner_weapon, owner_attacks)) then
+                local matches=true
+                local other_weapon=weapon
+                if own then other_weapon=opponent end
+                for _, entry in ipairs({
+                    {"filter_self",own and source or target,owner_weapon},
+                    {"filter_opponent",own and target or source,other_weapon},
+                    {"filter_attacker",attacking and source or target,attacking and weapon or opponent},
+                    {"filter_defender",attacking and target or source,attacking and opponent or weapon},
+                }) do
+                    -- The standard backstab formula is implemented geometrically above.
+                    if not (special.id == "backstab" and entry[1] == "filter_opponent") then
+                        for _, filter in ipairs(children(special,entry[1])) do
+                            matches=matches and unit_filter(context,entry[2],entry[3],filter)
+                        end
+                    end
+                end
+                if matches then result[#result+1] = special end
+            end
+        end
+    end
+    collect(weapon, true)
+    collect(opponent, false)
+    return result
+end
+
+local function rounded(value)
+    return value < 0 and math.ceil(value - 0.5) or math.floor(value + 0.5)
+end
+
+local function composite_value(effects, base, integer)
+    local groups, priorities = {}, {}
+    for _, effect in ipairs(effects) do
+        local priority = tonumber(effect.priority) or 0
+        if not groups[priority] then groups[priority]={}; priorities[#priorities+1]=priority end
+        groups[priority][#groups[priority]+1]=effect
+    end
+    table.sort(priorities)
+    for index, priority in ipairs(priorities) do
+        local set_min, set_max, lower, upper
+        local add, sub, mul, div = {}, {}, {}, {}
+        for _, effect in ipairs(groups[priority]) do
+            local filter = children(effect, "filter_base_value")[1] or {}
+            local matches = (not filter.equals or base == filter.equals)
+                and (not filter.not_equals or base ~= filter.not_equals)
+                and (not filter.less_than or base < filter.less_than)
+                and (not filter.greater_than or base > filter.greater_than)
+                and (not filter.less_than_equal_to or base <= filter.less_than_equal_to)
+                and (not filter.greater_than_equal_to or base >= filter.greater_than_equal_to)
+            if matches then
+                local id = effect.id or effect.name or ""
+                local function number(key)
+                    if effect[key] == nil then return nil end
+                    return assert(tonumber(effect[key]), "formula evaluation required for special " .. id .. "." .. key)
+                end
+                local value = number("value")
+                if value then
+                    if enabled(effect.cumulative) then value=math.max(base,value) end
+                    set_min=math.min(set_min or value,value)
+                    set_max=math.max(set_max or value,value)
+                end
+                local lo, hi = number("min_value"), number("max_value")
+                if lo then lower=math.max(lower or lo,lo) end
+                if hi then upper=math.min(upper or hi,hi) end
+                local a,b,m,d = number("add"),number("sub"),number("multiply"),number("divide")
+                if a then add[id]=math.max(add[id] or a,a) end
+                if b then sub[id]=math.max(sub[id] or b,b) end
+                if m then mul[id]=math.max(mul[id] or m,m) end
+                if d and d ~= 0 then div[id]=math.max(div[id] or d,d) end
+            end
+        end
+        local value = set_max and (math.max(set_max,0)+math.min(set_min,0)) or base
+        for _, n in pairs(add) do value=value+n end
+        for _, n in pairs(sub) do value=value-n end
+        for _, n in pairs(mul) do value=value*(math.floor(n*100)/100) end
+        for _, n in pairs(div) do value=value/(math.floor(n*100)/100) end
+        if lower then value=math.max(lower,value) end
+        if upper then value=math.min(upper,value) end
+        base = (integer or index < #priorities) and rounded(value) or value
+    end
+    return base
+end
+
+-- Same tie-breaking/minimum as upstream utils::round_damage.
+local function round_damage(base, bonus, divisor)
+    if base == 0 then return 0 end
+    local rounding = math.floor(divisor / 2) - ((bonus <= divisor or divisor == 1) and 0 or 1)
+    return math.max(1, math.floor((base * bonus + rounding) / divisor))
+end
+
+local function effective_strikes(context, unit, target, attack, opponent, attacking)
+    local strikes = math.max(0, composite_value(matching_specials(context,unit,target,
+        attack,opponent,"attacks",attacking),attack.strikes,true))
+    local swarm = matching_specials(context,unit,target,attack,opponent,"swarm",attacking)
+    if #swarm == 0 then return strikes end
+    local minimum,maximum=0,0
+    for _, effect in ipairs(swarm) do
+        minimum=math.max(minimum,tonumber(effect.swarm_attacks_min) or 0)
+        maximum=math.max(maximum,tonumber(effect.swarm_attacks_max) or strikes)
+    end
+    return minimum + math.floor((maximum - minimum)
+        * math.min(unit.hitpoints, unit.max_hitpoints) / unit.max_hitpoints)
+end
+
+function combat.weapon_reaches(weapon, from, to)
+    local function axial(p)
+        local q=p.x-1
+        return q,p.y-1-math.floor((q+q%2)/2)
+    end
+    local aq,ar=axial(from)
+    local bq,br=axial(to)
+    local distance=(math.abs(aq-bq)+math.abs(ar-br)+math.abs(aq+ar-bq-br))/2
+    return distance >= (weapon.min_range or 1) and distance <= (weapon.max_range or 1)
+end
+
+local function disabled_weapon(context, source, target, weapon, opponent, attacking)
+    return not combat.weapon_reaches(weapon,source.position,target.position)
+        or #matching_specials(context,source,target,weapon,opponent,"disable",attacking) > 0
+end
+
+local function attack_stats(context, source, target, attack, attacking, slowed, opponent_weapon)
     local terrain = context.map:get(target.position)
     local defense = assert(child(target, "defense")[terrain],
         "unit has no defense value for terrain: " .. terrain)
-    local chance = 100 - defense
-    if has_special(attack, "magical") then
-        chance = 70
-    elseif attacking and has_special(attack, "marksman") then
-        chance = math.max(chance, 60)
-    end
-    chance = math.max(0, math.min(100, chance + (attack.accuracy or 0)))
+    local chance = math.max(0, math.min(100, 100 - defense + (attack.accuracy or 0)
+        - (opponent_weapon and opponent_weapon.parry or 0)))
+    chance = math.max(0, math.min(100, composite_value(matching_specials(context,
+        source,target,attack,opponent_weapon,"chance_to_hit",attacking),chance,true)))
+    if enabled(target.invulnerable) then chance = 0 end
     local damage_type = assert(attack.damage_type, "attack has no damage type")
+    local replacements, alternatives = {}, {}
+    for _, effect in ipairs(matching_specials(context,source,target,attack,opponent_weapon,"damage_type",attacking)) do
+        if effect.replacement_type then
+            replacements[effect.replacement_type]=(replacements[effect.replacement_type] or 0)+1
+        end
+        if effect.alternative_type then alternatives[effect.alternative_type]=true end
+    end
+    local count=0
+    for kind, n in pairs(replacements) do
+        if n > count or (n == count and kind < damage_type) then damage_type,count=kind,n end
+    end
+    local resistances=child(target,"resistance")
+    local alternative_names={}
+    for kind in pairs(alternatives) do alternative_names[#alternative_names+1]=kind end
+    table.sort(alternative_names)
+    for _, kind in ipairs(alternative_names) do
+        if (resistances[kind] or 0) < (resistances[damage_type] or 0) then damage_type=kind end
+    end
     local resistance = assert(child(target, "resistance")[damage_type],
         "unit has no resistance for damage type: " .. damage_type)
     local time = time_of_day(context)
-    local alignment = source.alignment or "neutral"
+    local alignment = attack.alignment or source.alignment or "neutral"
     local lawful_bonus = illuminated_lawful_bonus(context, source, time.lawful_bonus)
     local alignment_bonus = alignment_modifier(alignment, lawful_bonus)
     if source.fearless and alignment_bonus < 0 then alignment_bonus = 0 end
     local leadership = leadership_bonus(context, source)
-    local slow_modifier = (slowed == nil and source.slowed or slowed) and 50 or 100
+    local is_slowed = slowed == nil and source.slowed or slowed
     local effective_resistance = resistance
     if attacking and resistance > 0 and ability(target, "steadfast") then
         effective_resistance = math.min(50, resistance * 2)
     end
-    local modified_damage = math.max(0,
-        math.floor(attack.damage * (100 + alignment_bonus + leadership)
-            * (100 - effective_resistance)
-            * slow_modifier / 1000000 + 0.5))
-    if backstab_active(context, source, target, attack, attacking) then
-        modified_damage = modified_damage * (weapon_special(attack, "backstab").multiply or 2)
-    end
+    local base_damage = composite_value(matching_specials(context,
+        source,target,attack,opponent_weapon,"damage",attacking),attack.damage,false)
+    local modified_damage = round_damage(base_damage,
+        (100 + alignment_bonus + leadership) * (100 - effective_resistance),
+        is_slowed and 20000 or 10000)
     return chance, modified_damage, damage_type, resistance, effective_resistance,
         time, alignment, alignment_bonus, leadership
 end
@@ -903,12 +1155,11 @@ end
 local function retaliation_for(context, attacker, defender, attack)
     local best, best_rating
     for _, candidate in ipairs(children(defender, "attack")) do
-        if candidate.range == attack.range and (candidate.defense_weight or 1) > 0 then
-            local chance, damage = attack_stats(context, defender, attacker, candidate, false)
-            local strikes = has_special(candidate, "swarm") and math.max(1,
-                math.floor(candidate.strikes * defender.hitpoints / defender.max_hitpoints))
-                or candidate.strikes
-            local rating = strikes * damage * chance * (candidate.defense_weight or 1)
+        if candidate.range == attack.range and (tonumber(candidate.defense_weight) or 1) > 0
+            and not disabled_weapon(context,defender,attacker,candidate,attack,false) then
+            local chance, damage = attack_stats(context, defender, attacker, candidate, false, nil, attack)
+            local strikes = effective_strikes(context,defender,attacker,candidate,attack,false)
+            local rating = strikes * damage * chance * (tonumber(candidate.defense_weight) or 1)
             if not best_rating or rating > best_rating then
                 best, best_rating = candidate, rating
             end
@@ -917,11 +1168,6 @@ local function retaliation_for(context, attacker, defender, attack)
     return best
 end
 
-
-local function effective_strikes(unit, attack)
-    if not has_special(attack, "swarm") then return attack.strikes end
-    return math.max(1, math.floor(attack.strikes * unit.hitpoints / unit.max_hitpoints))
-end
 
 local function prepare_battle(context, command, attacker, defender)
     attacker = attacker or assert(context.objects:get(command.attacker), "unknown attacker")
@@ -935,71 +1181,72 @@ local function prepare_battle(context, command, attacker, defender)
         context.combat_teams[side.id] = context.state:get("team:" .. side.id) or side.team_name
     end
     local attack = find_attack(attacker, command.weapon)
-    local chance, damage = attack_stats(context, attacker, defender, attack, true)
-    local _, slowed_damage = attack_stats(context, attacker, defender, attack, true, true)
     local retaliation = retaliation_for(context, attacker, defender, attack)
+    local chance, damage = attack_stats(context, attacker, defender, attack, true, nil, retaliation)
+    local _, slowed_damage = attack_stats(context, attacker, defender, attack, true, true, retaliation)
     local retaliation_chance, retaliation_damage, slowed_retaliation_damage,
         retaliation_strikes = 0, 0, 0, 0
     if retaliation then
         retaliation_chance, retaliation_damage =
-            attack_stats(context, defender, attacker, retaliation, false)
+            attack_stats(context, defender, attacker, retaliation, false, nil, attack)
         _, slowed_retaliation_damage =
-            attack_stats(context, defender, attacker, retaliation, false, true)
-        retaliation_strikes = effective_strikes(defender, retaliation)
+            attack_stats(context, defender, attacker, retaliation, false, true, attack)
+        retaliation_strikes = effective_strikes(context,defender,attacker,retaliation,attack,false)
     end
-    local attack_deflect = weapon_special(attack, "deflect")
-    local retaliation_deflect = retaliation and weapon_special(retaliation, "deflect")
-    chance = math.max(0, chance - (retaliation and retaliation.parry or 0)
-        - (retaliation_deflect and retaliation_deflect.sub or 0))
-    retaliation_chance = math.max(0,
-        retaliation_chance - (attack.parry or 0)
-            - (attack_deflect and attack_deflect.sub or 0))
-    local attack_absorb = weapon_special(attack, "absorb")
-    local retaliation_absorb = retaliation and weapon_special(retaliation, "absorb")
-    if retaliation_absorb then
-        damage = damage * retaliation_absorb.multiply
-        slowed_damage = slowed_damage * retaliation_absorb.multiply
+    local function effects(own, kind)
+        if own then return matching_specials(context,attacker,defender,attack,retaliation,kind,true) end
+        return matching_specials(context,defender,attacker,retaliation,attack,kind,false)
     end
-    if attack_absorb then
-        retaliation_damage = retaliation_damage * attack_absorb.multiply
-        slowed_retaliation_damage = slowed_retaliation_damage * attack_absorb.multiply
+    local rounds=1
+    for _, own in ipairs({true,false}) do
+        for _, effect in ipairs(effects(own,"berserk")) do
+            rounds=math.max(rounds,tonumber(effect.value) or 30)
+        end
     end
-    local charge = weapon_special(attack, "charge")
-    if charge then
-        local multiplier = charge.multiply or 2
-        damage, slowed_damage = damage * multiplier, slowed_damage * multiplier
-        retaliation_damage = retaliation_damage * multiplier
-        slowed_retaliation_damage = slowed_retaliation_damage * multiplier
-    end
-    local berserk = has_special(attack, "berserk")
-        or (retaliation and has_special(retaliation, "berserk"))
-    local strikes = berserk and 30 or effective_strikes(attacker, attack)
-    if berserk and retaliation then retaliation_strikes = 30 end
-    local retaliation_first = retaliation and has_special(retaliation, "first_strike")
-        and not has_special(attack, "first_strike")
-    local function participant(unit, weapon, chance, damage, slowed_damage, strikes)
+    local strikes = effective_strikes(context,attacker,defender,attack,retaliation,true)
+    local retaliation_first = retaliation and #effects(false,"firststrike") > 0
+        and #effects(true,"firststrike") == 0
+    local function participant(unit, target, own, chance, damage, slowed_damage, strikes)
+        local drains=effects(own,"drains")
         return { hp = unit.hitpoints, maximum = unit.max_hitpoints,
             slowed = unit.slowed == true, chance = chance, damage = damage,
             slowed_damage = slowed_damage, strikes = strikes,
-            slow = weapon ~= nil and has_special(weapon, "slow"),
-            heal_percent = weapon ~= nil and has_special(weapon, "drain") and 50 or 0,
-            petrify = weapon ~= nil and has_special(weapon, "petrify") }
+            slow = #effects(own,"slow") > 0 and not enabled(target.unslowable),
+            poison = #effects(own,"poison") > 0 and not enabled(target.unpoisonable),
+            heal_percent = #drains > 0 and not enabled(target.undrainable)
+                and composite_value(drains,50,true) or 0,
+            heal_constant = composite_value(effects(own,"heal_on_hit"),0,true),
+            minimum_source_hp = 1,
+            petrify = #effects(own,"petrifies") > 0 and not enabled(target.unpetrifiable),
+            plague = effects(own,"plague")[1],
+        }
     end
-    local attack_metadata = {attack_stats(context, attacker, defender, attack, true)}
-    local defense_metadata = retaliation and {attack_stats(context, defender, attacker, retaliation, false)} or {}
+    local attack_metadata = {attack_stats(context, attacker, defender, attack, true, nil, retaliation)}
+    local defense_metadata = retaliation and {attack_stats(context, defender, attacker, retaliation, false, nil, attack)} or {}
     local model = {
-        attacker = participant(attacker, attack, chance, damage, slowed_damage, strikes),
-        defender = participant(defender, retaliation, retaliation_chance,
+        attacker = participant(attacker, defender, true, chance, damage, slowed_damage, strikes),
+        defender = participant(defender, attacker, false, retaliation_chance,
             retaliation_damage, slowed_retaliation_damage, retaliation_strikes),
         retaliation_first = retaliation_first == true,
-        berserk = berserk == true,
+        berserk = rounds > 1,
+        sequence = {},
     }
+    for _ = 1, rounds do
+        for strike = 1, math.max(strikes, retaliation_strikes) do
+            for _, side in ipairs(retaliation_first and {2, 1} or {1, 2}) do
+                if strike <= (side == 1 and strikes or retaliation_strikes) then
+                    model.sequence[#model.sequence + 1] = side
+                end
+            end
+        end
+    end
     model.attacker.metadata = attack_metadata
     model.defender.metadata = defense_metadata
     local time = time_of_day(context)
     local next_time = times[context.state:get("turn") % #times + 1]
     context.combat_units, context.combat_teams = nil, nil
     return model, attack, retaliation, {
+        disabled = disabled_weapon(context,attacker,defender,attack,retaliation,true),
         chance = chance,
         damage = damage,
         strikes = strikes,
@@ -1011,7 +1258,7 @@ local function prepare_battle(context, command, attacker, defender)
         retaliation_resistance_modifier = defense_metadata[5] or 0,
         retaliation_leadership_modifier = defense_metadata[9] or 0,
         weapon_name = attack.name or attack.id,
-        damage_type = attack.damage_type,
+        damage_type = attack_metadata[3],
         range = attack.range,
         retaliation_chance = retaliation_chance,
         retaliation_damage = retaliation_damage,
@@ -1028,6 +1275,7 @@ function combat.preview_attack(context, command)
     local model, _, _, result = prepare_battle(context, command)
     -- Metadata stays in Lua; the native kernel only receives scalar combat inputs.
     model.attacker.metadata, model.defender.metadata = nil, nil
+    model.attacker.plague, model.defender.plague = nil, nil
     local forecast = context.combat:forecast(model)
     result.attacker_outcomes, result.defender_outcomes = forecast.attacker, forecast.defender
     result.expected_damage = model.defender.hp - forecast.defender.expected
@@ -1054,20 +1302,20 @@ local function strike(context, events, source, target, attack, number, attacking
         local before = target.hitpoints
         local source_after
         source_after, target.hitpoints = context.combat:impact(source.hitpoints, target.hitpoints,
-            source.max_hitpoints, modified_damage, prepared.heal_percent)
+            source.max_hitpoints, modified_damage, prepared.heal_percent, prepared.heal_constant, prepared.minimum_source_hp)
         damage = before - target.hitpoints
         context.objects:set(target.id, "hitpoints", target.hitpoints)
-        if has_special(attack, "poison") and not target.poisoned then
+        if prepared.poison and target.hitpoints > 0 and not target.poisoned then
             target.poisoned = true
             context.objects:set(target.id, "poisoned", true)
             applied_poison = true
         end
-        if has_special(attack, "slow") and not target.slowed then
+        if prepared.slow and target.hitpoints > 0 and not target.slowed then
             target.slowed = true
             context.objects:set(target.id, "slowed", true)
             applied_slow = true
         end
-        if has_special(attack, "petrify") and not target.petrified then
+        if prepared.petrify and target.hitpoints > 0 and not target.petrified then
             target.petrified = true
             context.objects:set(target.id, "petrified", true)
             context.objects:set(target.id, "movement_points", 0)
@@ -1081,12 +1329,10 @@ local function strike(context, events, source, target, attack, number, attacking
             context.objects:set(target.id, "attacks_left", 0)
             applied_stun = true
         end
-        if has_special(attack, "drain") and source.hitpoints < source.max_hitpoints then
-            drained = source_after - source.hitpoints
-            if drained > 0 then
-                source.hitpoints = source.hitpoints + drained
-                context.objects:set(source.id, "hitpoints", source.hitpoints)
-            end
+        drained = source_after - source.hitpoints
+        if drained ~= 0 then
+            source.hitpoints = source_after
+            context.objects:set(source.id, "hitpoints", source.hitpoints)
         end
     end
 
@@ -1181,7 +1427,7 @@ apply_traits = function(context, object)
 
     local races = context.state:get("races") or {}
     local race = object.race and races[object.race] or nil
-    if not race or not race.ignore_global_traits then
+    if not race or not enabled(race.ignore_global_traits) then
         for _, definition in pairs(context.state:get("traits") or {}) do add(definition, false) end
     end
     if race then
@@ -1244,6 +1490,10 @@ function combat.initialize(context)
         context.objects:set(object.id, "max_experience", object.max_experience)
         context.objects:set(object.id, "traits", object.traits)
         context.objects:set(object.id, "traits_applied", true)
+        for _, status in ipairs({"unpoisonable", "undrainable", "unslowable", "unpetrifiable",
+            "unplagueable", "invulnerable", "fearless", "healthy"}) do
+            context.objects:set(object.id, status, enabled(object[status]))
+        end
         context.objects:set(object.id, "__children", object.__children)
         context.objects:set(object.id, "resting", false)
         context.objects:set(object.id, "poisoned", object.poisoned == true or object.poisoned == "yes")
@@ -1336,6 +1586,12 @@ function combat.snapshot(context)
             movement_costs = child(object, "movement_costs"),
             defense = child(object, "defense"),
             resistances = child(object, "resistance"),
+            unpoisonable = enabled(object.unpoisonable),
+            undrainable = enabled(object.undrainable),
+            unslowable = enabled(object.unslowable),
+            unpetrifiable = enabled(object.unpetrifiable),
+            unplagueable = enabled(object.unplagueable),
+            invulnerable = enabled(object.invulnerable),
             poisoned = object.poisoned == true,
             slowed = object.slowed == true,
             petrified = object.petrified == true,
@@ -1685,44 +1941,21 @@ function combat.resolve(context, command)
     assert(not attacker.stunned, "stunned unit cannot attack")
     assert(not defender.petrified, "petrified unit cannot be attacked")
     assert(attacker.attacks_left > 0, "unit has no attacks left")
-    assert(context.map:are_adjacent(attacker.position, defender.position),
-        "attack requires adjacent units")
-
-    local model, attack, retaliation = prepare_battle(context, command, attacker, defender)
+    local model, attack, retaliation, preview = prepare_battle(context, command, attacker, defender)
+    assert(not preview.disabled, "weapon is disabled or target is out of range")
     local events = {}
-    context.objects:set(attacker.id, "attacks_left", attacker.attacks_left - 1)
-    context.objects:set(attacker.id, "movement_points", 0)
+    context.objects:set(attacker.id, "attacks_left", math.max(0, attacker.attacks_left - (attack.attacks_used or 1)))
+    context.objects:set(attacker.id, "movement_points", math.max(0, attacker.movement_points - (attack.movement_used or 100000)))
     context.objects:set(attacker.id, "resting", false)
-    local attacker_strikes, defender_strikes = model.attacker.strikes, model.defender.strikes
-    local rounds = math.max(attacker_strikes, defender_strikes)
-    local retaliation_first = model.retaliation_first
-
-    for round = 1, rounds do
-        if retaliation_first then
-            if retaliation and round <= defender_strikes and attacker.hitpoints > 0 then
-                strike(context, events, defender, attacker, retaliation, round, false,
-                    model.defender)
-            end
-            if attacker.hitpoints == 0 or attacker.petrified then break end
-            if round <= attacker_strikes and defender.hitpoints > 0 then
-                strike(context, events, attacker, defender, attack, round, true,
-                    model.attacker)
-            end
-            if defender.hitpoints == 0 then break end
-            if defender.petrified then break end
+    local strike_counts = {0, 0}
+    for _, side in ipairs(model.sequence) do
+        if attacker.hitpoints == 0 or defender.hitpoints == 0
+            or attacker.petrified or defender.petrified then break end
+        strike_counts[side] = strike_counts[side] + 1
+        if side == 1 then
+            strike(context, events, attacker, defender, attack, strike_counts[side], true, model.attacker)
         else
-            if round <= attacker_strikes and defender.hitpoints > 0 then
-                strike(context, events, attacker, defender, attack, round, true,
-                    model.attacker)
-            end
-            if defender.hitpoints == 0 then break end
-            if defender.petrified then break end
-            if retaliation and round <= defender_strikes and attacker.hitpoints > 0 then
-                strike(context, events, defender, attacker, retaliation, round, false,
-                    model.defender)
-            end
-            if attacker.hitpoints == 0 then break end
-            if attacker.petrified then break end
+            strike(context, events, defender, attacker, retaliation, strike_counts[side], false, model.defender)
         end
     end
 
@@ -1801,10 +2034,10 @@ function combat.resolve(context, command)
         if scripted then events[#events + 1] = scripted end
         context.objects:remove(defeated.id)
         local killer_weapon = defeated.id == defender.id and attack or retaliation
-        local plague = killer_weapon and weapon_special(killer_weapon, "plague")
-        if plague and defeated.race ~= "undead" and defeated.undead_variation ~= "null"
+        local plague = (defeated.id == defender.id and model.attacker or model.defender).plague
+        if plague and not enabled(defeated.unplagueable) and defeated.race ~= "undead" and defeated.undead_variation ~= "null"
             and context.map:get(defeated.position) ~= "village" then
-            local unit_type = plague.type or "Walking Corpse"
+            local unit_type = plague.type or killer.type
             local template = (context.state:get("unit_types") or {})[unit_type]
             if template then
                 local number = context.state:get("next_recruit_id")
@@ -1952,7 +2185,7 @@ function combat.end_turn(context)
         events[#events + 1] = { type = "turn_started", turn = context.state:get("turn"), side = side.id }
         for _, event in ipairs(start_side(context, side.id)) do events[#events + 1] = event end
         if side.controller == "ai" then
-            for _, event in ipairs(simple_ai_turn(combat, context, side)) do
+            for _, event in ipairs(simple_ai_turn(combat, context, side, current)) do
                 events[#events + 1] = event
                 if event.type == "scenario_finished" then return events end
             end
@@ -2107,8 +2340,13 @@ function combat.actions(context, command)
             for _, target in ipairs(context.objects:all()) do
                 if not allied(context, target.side, object.side)
                     and visible_to(context, object.side, target)
-                    and context.map:are_adjacent(object.position, target.position) then
-                    targets[#targets + 1] = target.id
+                    and not target.petrified and target.hitpoints > 0 then
+                    for _, weapon in ipairs(children(object,"attack")) do
+                        if not disabled_weapon(context,object,target,weapon,nil,true) then
+                            targets[#targets + 1] = target.id
+                            break
+                        end
+                    end
                 end
             end
         end

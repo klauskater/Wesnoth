@@ -1714,3 +1714,74 @@ fn forecasts_cover_real_outcomes_and_do_not_consume_rng() {
         }
     }
 }
+
+#[test]
+fn ai_actions_carry_ordered_animation_snapshots() {
+    let mut game = ai_test();
+    game.acknowledge_dialog().unwrap();
+    let events = game.execute("end_turn", Value::Nil).unwrap();
+    let actions: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.get("type").and_then(Value::as_str),
+                Some("object_moved" | "battle_resolved")
+            )
+        })
+        .collect();
+    assert!(!actions.is_empty());
+    for event in actions {
+        assert!(event.get("replay_units").is_some());
+        assert!(event.get("replay_after").is_some());
+    }
+}
+
+#[test]
+fn terrain_search_uses_unit_costs_for_mountains_and_deep_water() {
+    use wesnoth_engine::{
+        engine::Map,
+        pathfinding::{SearchRequest, search},
+    };
+    let map = Map {
+        width: 3,
+        height: 1,
+        cells: ["Gg", "Mm", "Wo"].map(String::from).to_vec(),
+    };
+    let mut request = SearchRequest {
+        start: Position { x: 1, y: 1 },
+        budget: 5,
+        max_step: 5,
+        costs: [
+            ("grassland".into(), 1),
+            ("hills".into(), 2),
+            ("water".into(), 3),
+            ("mountains".into(), 99),
+            ("deep_water".into(), 99),
+        ]
+        .into(),
+        blocked: vec![],
+        occupied: vec![],
+        stop_near: vec![],
+        destination: None,
+        paths: true,
+    };
+    assert!(search(&map, &request).unwrap().is_empty());
+    request.costs.insert("mountains".into(), 1);
+    request.costs.insert("deep_water".into(), 1);
+    assert_eq!(search(&map, &request).unwrap().len(), 2);
+}
+
+#[test]
+fn initial_undead_keep_mandatory_race_immunities() {
+    let game = rooting_out_a_mage();
+    let snapshot = game.snapshot().unwrap();
+    let Value::List(units) = snapshot.objects else {
+        panic!("unit snapshot expected")
+    };
+    let corpse = units
+        .iter()
+        .find(|u| u.get("id").and_then(Value::as_str) == Some("thrall_one"))
+        .unwrap();
+    assert_eq!(corpse.get("unpoisonable"), Some(&Value::Bool(true)));
+    assert_eq!(corpse.get("undrainable"), Some(&Value::Bool(true)));
+}

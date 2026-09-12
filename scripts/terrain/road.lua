@@ -145,6 +145,7 @@ return function(map)
         return function(code)
             return code ~= ""
                 and code ~= road
+                and not starts_with(code, "D")
                 and not starts_with(code, "W")
                 and code ~= "Ai"
                 and not starts_with(code, "Q")

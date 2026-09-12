@@ -60,10 +60,10 @@ impl BattleDialog {
         let mut choices = Vec::new();
         for weapon in available.get("attacks").map(list).unwrap_or(&[]) {
             if let Some(id) = weapon.as_str() {
-                choices.push((
-                    id.into(),
-                    game.query("preview_attack", command(attacker, defender, id))?,
-                ));
+                let preview = game.query("preview_attack", command(attacker, defender, id))?;
+                if preview.get("disabled") != Some(&Value::Bool(true)) {
+                    choices.push((id.into(), preview));
+                }
             }
         }
         if choices.is_empty() {

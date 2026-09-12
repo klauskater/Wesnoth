@@ -1,0 +1,21 @@
+{
+  "version": "1.19.27+dev",
+  "source": "../Wesnoth-upstream",
+  "files": {
+    "src/wesconfig.h": "809a9b4ed52cc7d6201fe6075a00fb5161d306d3eda5a305b6f7bb084485dbab",
+    "src/actions/attack.cpp": "b7ee96e209d29858620679a05016963c53ba44609851f6e3112f8641ceacf106",
+    "src/units/attack_type.cpp": "efc369b65383025bb56243fb767ee1c4bbcccc7855700bc4e9e790d1f716e449",
+    "src/units/abilities.cpp": "09f12bc5569e16de11c135fe12ccece88bae03c70be7ee72da2fbdf3d4a3c9fb",
+    "src/utils/math.hpp": "a207f982efd98a12d22995d7701e8e9b9a8d0931af4733ee19b421f7981e297e",
+    "src/movetype.cpp": "33ca90da99f58031e5c43d2297eb96034ddb038b486c0c192abcdffa8343adb3",
+    "data/schema/units/types.cfg": "e92a02a12c0bb3566ff73b6aac931c942b6e84034d6c2e24e5ff10a321996657",
+    "data/schema/units/specials.cfg": "af92627a51d3cb233b84494eca7433741f06b7337cacd53548957f0fd6616e2e",
+    "data/schema/units/abilities.cfg": "23f3b5980b62946b4d5fae4acc9dd42d49cd675cfdcb00053bcb166a417a2a40",
+    "data/schema/units/single.cfg": "31cc59aa041898239e69313e27cc13658558a48e3bc379494d6847c3530cb0da",
+    "data/schema/units/modifications.cfg": "53582b5246ad9c128b439a58d77f60eaca7bc9cab6d66011e6273ac9d6b3f9f3",
+    "data/schema/filters/unit.cfg": "e3a1232eb244ff3d282c6f93c697e3b80e52b70cc62c419a6cd8804631017c74",
+    "data/schema/filters/weapon.cfg": "8f7ad406706dde9cc94d6477a4f45f4c88d2a589a195e5148ec669b773ec7fe5",
+    "data/schema/filters/base_value.cfg": "0bc4ca171fdf622ce40bc02891ec91f30db53e708a19b70eeac2c5aa167753a7",
+    "data/core/macros/weapon_specials.cfg": "a1c5d410af629c3ac4ed391a753ea75506e5c45e0d40d451a80d27839570a1bd"
+  }
+}

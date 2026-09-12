@@ -159,7 +159,8 @@ def emit_attack(lines: list[str], attack):
         "damage": source.get("damage", "0"),
         "strikes": source.get("number", "1"),
     }
-    for name in ("accuracy", "parry", "attack_weight", "defense_weight", "movement_used"):
+    for name in ("accuracy", "parry", "attack_weight", "defense_weight", "movement_used",
+                 "attacks_used", "min_range", "max_range", "alignment", "icon"):
         if name in source:
             values[name] = source[name]
     lines.append("    [attack]")

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::Path,
 };
 
@@ -40,6 +40,9 @@ pub struct GameScreen {
     reachable: Option<BTreeSet<(i64, i64)>>,
     move_preview: MovePreview,
     move_animation: Option<MoveAnimation>,
+    replay: VecDeque<Value>,
+    replay_after: Option<Value>,
+    replay_final: Option<(Value, Value)>,
     status: Value,
     units: Value,
     time_art: Vec<Texture2D>,
@@ -137,6 +140,9 @@ impl GameScreen {
             reachable: None,
             move_preview: MovePreview::default(),
             move_animation: None,
+            replay: VecDeque::new(),
+            replay_after: None,
+            replay_final: None,
             status,
             units,
             time_art,
@@ -160,7 +166,15 @@ impl GameScreen {
         if self.battle_animation.as_ref().is_some_and(|a| a.finished()) {
             self.battle_animation = None;
         }
-        let moving = self.move_animation.is_some() || self.battle_animation.is_some();
+        self.advance_replay();
+        let moving = self.move_animation.is_some()
+            || self.battle_animation.is_some()
+            || self.replay_final.is_some();
+        if self.replay_final.is_some() {
+            if let Some(a) = &self.move_animation {
+                self.viewport.focus(a.position(get_time()));
+            }
+        }
         clear_background(Color::from_rgba(12, 17, 22, 255));
         let screen = vec2(screen_width(), screen_height());
         let scale = panel_scale(screen);
@@ -181,7 +195,7 @@ impl GameScreen {
             }
         }
         let reach_key = (self.selected_hex, self.game.revision());
-        if self.reach_key != Some(reach_key) {
+        if !moving && self.reach_key != Some(reach_key) {
             self.move_preview.clear();
             self.reach_key = Some(reach_key);
             match movement_range(&self.game, &self.units, &self.status, self.selected_hex) {
@@ -336,7 +350,7 @@ impl GameScreen {
         );
         let mut input = ui.input();
         input.pressed &= !modal && !moving;
-        let ready = playable(&self.status) && self.move_animation.is_none();
+        let ready = playable(&self.status) && !moving;
         let button = |row: f32| Rect::new(16.0, height - 16.0 - 56.0 - row * 64.0, 308.0, 56.0);
         if ui.button(
             &input,
@@ -372,9 +386,9 @@ impl GameScreen {
             self.execute("end_turn", Value::Nil);
         }
 
-        if modal || self.recruit_menu || self.error.is_some() {
+        if !moving && (modal || self.recruit_menu || self.error.is_some()) {
             self.draw_modal(font);
-        } else if self.move_animation.is_none() && is_key_pressed(KeyCode::Escape) {
+        } else if !moving && is_key_pressed(KeyCode::Escape) {
             return Action::Back;
         }
         Action::None
@@ -589,9 +603,65 @@ impl GameScreen {
         }
     }
 
+    fn advance_replay(&mut self) {
+        if self.move_animation.is_some() || self.battle_animation.is_some() {
+            return;
+        }
+        if let Some(units) = self.replay_after.take() {
+            self.units = units;
+        }
+        if let Some(event) = self.replay.pop_front() {
+            self.units = event.get("replay_units").unwrap().clone();
+            if let Value::Map(status) = &mut self.status {
+                status.insert(
+                    "visible_units".into(),
+                    event.get("replay_visible").cloned().unwrap_or(Value::Nil),
+                );
+            }
+            self.replay_after = event.get("replay_after").cloned();
+            self.move_animation = MoveAnimation::from_event(&event, get_time());
+            self.battle_animation = crate::battle::BattleAnimation::new(
+                self.units.clone(),
+                std::slice::from_ref(&event),
+            );
+            self.selected_hex = event.get("from").and_then(position).or_else(|| {
+                list(&self.units)
+                    .iter()
+                    .find(|u| string(u, "id") == string(&event, "attacker"))
+                    .and_then(|u| u.get("position"))
+                    .and_then(position)
+            });
+            if let Some(p) = self.selected_hex {
+                self.viewport.focus(hex_center(p.x, p.y));
+            }
+            if let Some(a) = &self.battle_animation {
+                self.battle_art.prepare(&a.units, &a.strikes);
+            }
+        } else if let Some((status, units)) = self.replay_final.take() {
+            self.status = status;
+            self.units = units;
+            self.selected_hex = None;
+            self.reach_key = None;
+        }
+    }
+
     fn execute(&mut self, action: &str, command: Value) {
         match self.game.execute(action, command) {
             Ok(events) => {
+                if action == "end_turn" {
+                    self.replay = events
+                        .iter()
+                        .filter(|e| {
+                            e.get("replay_units").is_some()
+                                && items(e, "replay_visible").iter().any(|id| {
+                                    ["object", "attacker", "defender"]
+                                        .iter()
+                                        .any(|key| e.get(key) == Some(id))
+                                })
+                        })
+                        .cloned()
+                        .collect();
+                }
                 self.battle_animation = if action == "resolve" {
                     crate::battle::BattleAnimation::new(self.units.clone(), &events)
                 } else {
@@ -620,8 +690,15 @@ impl GameScreen {
                         .map(|units| (status, units))
                 }) {
                     Ok((status, units)) => {
-                        self.status = status;
-                        self.units = units;
+                        if !self.replay.is_empty() {
+                            self.replay_final = Some((status, units));
+                            self.selected_hex = None;
+                            self.reachable = None;
+                            self.advance_replay();
+                        } else {
+                            self.status = status;
+                            self.units = units;
+                        }
                     }
                     Err(error) => self.error = Some(error),
                 }

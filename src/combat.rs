@@ -16,6 +16,8 @@ struct Weapon {
     strikes: usize,
     slow: bool,
     heal_percent: i64,
+    heal_constant: i64,
+    minimum_source_hp: i64,
     petrify: bool,
 }
 impl Weapon {
@@ -27,16 +29,26 @@ impl Weapon {
             strikes: t.get::<usize>("strikes")?,
             slow: t.get("slow")?,
             heal_percent: t.get("heal_percent")?,
+            heal_constant: t.get::<Option<i64>>("heal_constant")?.unwrap_or(0),
+            minimum_source_hp: t.get::<Option<i64>>("minimum_source_hp")?.unwrap_or(0),
             petrify: t.get("petrify")?,
         })
     }
 }
 
 /// Shared damage/healing arithmetic for actual strikes and forecast branches.
-fn impact(source: i64, target: i64, maximum: i64, damage: i64, heal_percent: i64) -> (i64, i64) {
+fn impact(
+    source: i64,
+    target: i64,
+    maximum: i64,
+    damage: i64,
+    heal_percent: i64,
+    heal_constant: i64,
+    minimum_source_hp: i64,
+) -> (i64, i64) {
     let inflicted = damage.max(0).min(target);
     (
-        (source + inflicted * heal_percent / 100).min(maximum),
+        (source + inflicted * heal_percent / 100 + heal_constant).clamp(minimum_source_hp, maximum),
         target - inflicted,
     )
 }
@@ -47,14 +59,26 @@ pub fn install(lua: &Lua, context: &Table) -> mlua::Result<()> {
         "impact",
         lua.create_function(
             |_,
-             (_self, source, target, maximum, damage, heal_percent): (
-                Table,
-                i64,
-                i64,
-                i64,
-                i64,
-                i64,
-            )| { Ok(impact(source, target, maximum, damage, heal_percent)) },
+             (
+                _self,
+                source,
+                target,
+                maximum,
+                damage,
+                heal_percent,
+                heal_constant,
+                minimum_source_hp,
+            ): (Table, i64, i64, i64, i64, i64, Option<i64>, Option<i64>)| {
+                Ok(impact(
+                    source,
+                    target,
+                    maximum,
+                    damage,
+                    heal_percent,
+                    heal_constant.unwrap_or(0),
+                    minimum_source_hp.unwrap_or(0),
+                ))
+            },
         )?,
     )?;
     api.set(
@@ -77,48 +101,61 @@ fn forecast(lua: &Lua, request: Table) -> mlua::Result<Table> {
     let weapons = [Weapon::read(a)?, Weapon::read(d)?];
     let first: bool = request.get("retaliation_first")?;
     let mut states = BTreeMap::from([(initial, 1.0)]);
-    for round in 0..weapons[0].strikes.max(weapons[1].strikes) {
-        for source in if first { [1, 0] } else { [0, 1] } {
-            let weapon = &weapons[source];
-            if round >= weapon.strikes {
+    let strike_counts = [weapons[0].strikes, weapons[1].strikes];
+    let sequence: Vec<usize> =
+        if let Some(sequence) = request.get::<Option<Vec<usize>>>("sequence")? {
+            if sequence.iter().any(|side| !(1..=2).contains(side)) {
+                return Err(mlua::Error::runtime("combat sequence side must be 1 or 2"));
+            }
+            sequence.into_iter().map(|side| side - 1).collect()
+        } else {
+            (0..weapons[0].strikes.max(weapons[1].strikes))
+                .flat_map(|round| {
+                    (if first { [1, 0] } else { [0, 1] })
+                        .into_iter()
+                        .filter(move |&source| round < strike_counts[source])
+                })
+                .collect()
+        };
+    for source in sequence {
+        let weapon = &weapons[source];
+        let target = 1 - source;
+        let mut next = BTreeMap::new();
+        for (state, probability) in states {
+            if state.stopped {
+                *next.entry(state).or_insert(0.0) += probability;
                 continue;
             }
-            let target = 1 - source;
-            let mut next = BTreeMap::new();
-            for (state, probability) in states {
-                if state.stopped {
-                    *next.entry(state).or_insert(0.0) += probability;
+            for (hit, chance) in [(false, 1.0 - weapon.chance), (true, weapon.chance)] {
+                if chance == 0.0 {
                     continue;
                 }
-                for (hit, chance) in [(false, 1.0 - weapon.chance), (true, weapon.chance)] {
-                    if chance == 0.0 {
-                        continue;
-                    }
-                    let mut after = state;
-                    if hit {
-                        let damage = if state.slow[source] {
-                            weapon.slowed_damage
-                        } else {
-                            weapon.damage
-                        };
-                        let (s, t) = impact(
-                            state.hp[source],
-                            state.hp[target],
-                            maximum[source],
-                            damage,
-                            weapon.heal_percent,
-                        );
-                        after.hp[source] = s;
-                        after.hp[target] = t;
-                        after.slow[target] |= weapon.slow;
-                        after.hit[target] = true;
-                        after.stopped = weapon.petrify || s == 0 || t == 0;
-                    }
-                    *next.entry(after).or_insert(0.0) += probability * chance;
+                let mut after = state;
+                if hit {
+                    let damage = if state.slow[source] {
+                        weapon.slowed_damage
+                    } else {
+                        weapon.damage
+                    };
+                    let (s, t) = impact(
+                        state.hp[source],
+                        state.hp[target],
+                        maximum[source],
+                        damage,
+                        weapon.heal_percent,
+                        weapon.heal_constant,
+                        weapon.minimum_source_hp,
+                    );
+                    after.hp[source] = s;
+                    after.hp[target] = t;
+                    after.slow[target] |= weapon.slow;
+                    after.hit[target] = true;
+                    after.stopped = weapon.petrify || s == 0 || t == 0;
                 }
+                *next.entry(after).or_insert(0.0) += probability * chance;
             }
-            states = next;
         }
+        states = next;
     }
     let result = lua.create_table()?;
     for (side, name) in [(0, "attacker"), (1, "defender")] {
@@ -154,9 +191,9 @@ mod tests {
     use super::*;
     #[test]
     fn capped_damage_and_drain_use_actual_damage() {
-        assert_eq!(impact(3, 7, 10, 20, 50), (6, 0));
-        assert_eq!(impact(9, 7, 10, 6, 50), (10, 1));
-        assert_eq!(impact(3, 7, 10, 20, 0), (3, 0));
+        assert_eq!(impact(3, 7, 10, 20, 50, 0, 0), (6, 0));
+        assert_eq!(impact(9, 7, 10, 6, 50, 0, 0), (10, 1));
+        assert_eq!(impact(3, 7, 10, 20, 0, 0, 0), (3, 0));
     }
     #[test]
     fn screenshot_archer_forecast() {

@@ -8,6 +8,11 @@ fn scene(map: &Map) -> TerrainScene {
         map,
         &[
             TerrainScript {
+                family: "road".into(),
+                codes: ["Rr", "Rp", "Rd"].map(String::from).to_vec(),
+                source: include_str!("../scripts/terrain/road.lua").into(),
+            },
+            TerrainScript {
                 family: "water".into(),
                 codes: ["Ww", "Ds", "Ss", "Sm"].map(String::from).to_vec(),
                 source: include_str!("../scripts/terrain/water.lua").into(),
@@ -42,6 +47,11 @@ fn grass_covers_sand_sand_covers_roads_and_swamp_covers_water() {
     let mut swamp_edges = 0;
     for sprite in scene.ground() {
         let asset = &sprite.frames.assets[0];
+        assert!(
+            !(asset.starts_with("road:")
+                && sprite.local_order > -1000
+                && map.raw(sprite.anchor).unwrap() == "Ds")
+        );
         if asset.starts_with("water:sand/beach-") {
             assert_eq!(map.raw(sprite.anchor).unwrap(), "Rp");
             assert_eq!(sprite.local_order, -319);

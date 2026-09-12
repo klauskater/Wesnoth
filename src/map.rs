@@ -16,7 +16,14 @@ pub struct MapTiles(BTreeMap<String, MapTile>);
 
 impl MapTiles {
     pub fn get(&self, terrain_code: &str) -> Option<&MapTile> {
-        self.0.get(crate::terrain::gameplay_type(terrain_code))
+        let terrain = crate::terrain::gameplay_type(terrain_code);
+        self.0.get(terrain).or_else(|| {
+            self.0.get(match terrain {
+                "mountains" => "hills",
+                "deep_water" | "swamp_water" => "water",
+                _ => terrain,
+            })
+        })
     }
 }
 

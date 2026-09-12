@@ -59,9 +59,15 @@ pub fn gameplay_type(code: &str) -> &'static str {
         "keep"
     } else if base.starts_with('C') {
         "castle"
-    } else if base.starts_with('W') || base == "Ss" {
+    } else if base.starts_with("Wo") {
+        "deep_water"
+    } else if base.starts_with('W') {
         "water"
-    } else if base.starts_with('H') || base.starts_with('M') {
+    } else if base.starts_with('S') {
+        "swamp_water"
+    } else if base.starts_with('M') {
+        "mountains"
+    } else if base.starts_with('H') {
         "hills"
     } else {
         match code {

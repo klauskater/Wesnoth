@@ -143,6 +143,7 @@ local function attack_score(rules, context, cfg, unit, target, attack, position)
         attacker = unit.id, defender = target.id, weapon = attack.id, position = position,
     })
     local aggression, caution = cfg.aggression or 1, cfg.caution or 1
+    if preview.disabled then return -math.huge end
     local score = preview.expected_damage * (3 + aggression)
         - preview.expected_retaliation * (2 + caution)
         + preview.kill_probability * unit_value(target) * 5
@@ -179,11 +180,12 @@ local function best_attack(rules, context, cfg, committed)
             end
             for _, cell in ipairs(positions) do
                 for _, target in ipairs(enemies) do
-                    if context.map:are_adjacent(cell.position, target.position) then
-                        for _, attack in ipairs(children(unit, "attack")) do
+                    for _, attack in ipairs(children(unit, "attack")) do
+                        if (tonumber(attack.attack_weight) or 1) > 0
+                            and rules.weapon_reaches(attack,cell.position,target.position) then
                             local score = attack_score(rules, context, cfg, unit, target,
                                 attack, cell.position)
-                            if not best or score > best.score then
+                            if score > -math.huge and (not best or score > best.score) then
                                 best = { score = score, unit = unit.id, target = target.id,
                                     weapon = attack.id, position = cell.position,
                                     move = cell.cost > 0 }
@@ -298,25 +300,42 @@ local function recruit_units(rules, context, cfg, events)
     end
 end
 
-local function simple_ai_turn(rules, context, cfg)
+local function simple_ai_turn(rules, context, cfg, viewer)
     local events, committed = {}, {}
+    local function perform(action, command)
+        local before = rules.snapshot(context)
+        local visible = rules.visible_unit_ids(context, viewer)
+        local result = rules[action](context, command)
+        local batch = result.type and {result} or result
+        for _, event in ipairs(batch) do
+            if event.type == "object_moved" or event.type == "battle_resolved" then
+                event.replay_visible = visible
+                for _, id in ipairs(rules.visible_unit_ids(context, viewer)) do
+                    event.replay_visible[#event.replay_visible + 1] = id
+                end
+                event.replay_units = before
+                event.replay_after = rules.snapshot(context)
+            end
+        end
+        return result
+    end
     recruit_units(rules, context, cfg, events)
     for _ = 1, 100 do
         local attack = best_attack(rules, context, cfg, committed)
         if attack and attack.score > (cfg.attack_threshold or -20) then
             if attack.move then
-                append(events, rules.move(context,
+                append(events, perform("move",
                     { object = attack.unit, destination = attack.position }))
             end
             if context.objects:get(attack.unit) and context.objects:get(attack.target) then
-                append(events, rules.resolve(context, { attacker = attack.unit,
+                append(events, perform("resolve", { attacker = attack.unit,
                     defender = attack.target, weapon = attack.weapon }))
                 if is_finished(events) then return events end
             end
         else
             local movement = best_movement(rules, context, cfg, committed)
             if not movement then break end
-            append(events, rules.move(context,
+            append(events, perform("move",
                 { object = movement.unit, destination = movement.position }))
             committed[movement.unit] = true
             if is_finished(events) then return events end
