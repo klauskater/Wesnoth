@@ -1,3 +1,4 @@
+use crate::connection::Connection;
 use crate::map_renderer::hex_center;
 use macroquad::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +23,8 @@ impl MovePreview {
     /// Invalid taps leave the existing preview untouched and do not query Lua.
     pub fn tap(
         &mut self,
-        game: &Game,
+        connection: &mut Connection,
+        game: &mut Game,
         unit: &str,
         origin: Position,
         target: Position,
@@ -36,14 +38,14 @@ impl MovePreview {
             ("destination".into(), position_value(target)),
         ]));
         if self.unit == unit
-            && self.revision == game.revision()
+            && self.revision == connection.world_revision()
             && self.path.first() == Some(&origin)
             && self.path.last() == Some(&target)
         {
             self.clear();
             return Ok(Some(command));
         }
-        let response = game.query("reachable", command.clone())?;
+        let response = connection.query(game, "reachable", command.clone())?;
         let Value::List(cells) = response else {
             return Ok(None);
         };
@@ -64,7 +66,7 @@ impl MovePreview {
             return Err("movement route does not reach destination".into());
         }
         self.unit = unit.into();
-        self.revision = game.revision();
+        self.revision = connection.world_revision();
         self.path = path;
         Ok(None)
     }
@@ -177,9 +179,10 @@ mod tests {
         game.acknowledge_dialog().unwrap();
         game
     }
-    fn reachable(game: &Game) -> BTreeSet<(i64, i64)> {
-        let response = game
+    fn reachable(connection: &mut Connection, game: &mut Game) -> BTreeSet<(i64, i64)> {
+        let response = connection
             .query(
+                game,
                 "reachable",
                 Value::Map(BTreeMap::from([
                     ("object".into(), Value::String("eren".into())),
@@ -200,14 +203,15 @@ mod tests {
     #[test]
     fn two_taps_move_and_invalid_taps_preserve_the_preview() {
         let mut game = game();
+        let mut connection = Connection::default();
         let origin = Position { x: 2, y: 4 };
         let target = Position { x: 5, y: 2 };
-        let allowed = reachable(&game);
+        let allowed = reachable(&mut connection, &mut game);
         let mut preview = MovePreview::default();
         let saved = game.save().unwrap();
         assert!(
             preview
-                .tap(&game, "eren", origin, target, &allowed)
+                .tap(&mut connection, &mut game, "eren", origin, target, &allowed)
                 .unwrap()
                 .is_none()
         );
@@ -223,7 +227,14 @@ mod tests {
         ] {
             assert!(
                 preview
-                    .tap(&game, "eren", origin, invalid, &allowed)
+                    .tap(
+                        &mut connection,
+                        &mut game,
+                        "eren",
+                        origin,
+                        invalid,
+                        &allowed
+                    )
                     .unwrap()
                     .is_none()
             );
@@ -235,7 +246,7 @@ mod tests {
             "preview must not change gameplay state"
         );
         let command = preview
-            .tap(&game, "eren", origin, target, &allowed)
+            .tap(&mut connection, &mut game, "eren", origin, target, &allowed)
             .unwrap()
             .unwrap();
         assert!(preview.path().is_empty());
@@ -259,7 +270,7 @@ mod tests {
         );
         assert!(
             preview
-                .tap(&game, "eren", target, origin, &reachable(&game))
+                .tap(&mut connection, &mut game, "eren", target, origin, &allowed)
                 .unwrap()
                 .is_none()
         );
@@ -286,7 +297,9 @@ mod tests {
         assert!(
             unit.get("defense")
                 .unwrap()
-                .get(game.map().get(target).unwrap())
+                .get(wesnoth_engine::terrain::gameplay_type(
+                    game.map().raw(target).unwrap(),
+                ))
                 .and_then(Value::as_i64)
                 .is_some()
         );
@@ -345,20 +358,21 @@ mod tests {
     #[test]
     fn retarget_cancel_and_revision_change_require_a_new_confirmation() {
         let mut game = game();
+        let mut connection = Connection::default();
         let origin = Position { x: 2, y: 4 };
         let first = Position { x: 5, y: 2 };
         let second = Position { x: 3, y: 3 };
-        let allowed = reachable(&game);
+        let allowed = reachable(&mut connection, &mut game);
         let mut preview = MovePreview::default();
         assert!(
             preview
-                .tap(&game, "eren", origin, first, &allowed)
+                .tap(&mut connection, &mut game, "eren", origin, first, &allowed)
                 .unwrap()
                 .is_none()
         );
         assert!(
             preview
-                .tap(&game, "eren", origin, second, &allowed)
+                .tap(&mut connection, &mut game, "eren", origin, second, &allowed)
                 .unwrap()
                 .is_none()
         );
@@ -366,14 +380,15 @@ mod tests {
         preview.clear();
         assert!(
             preview
-                .tap(&game, "eren", origin, second, &allowed)
+                .tap(&mut connection, &mut game, "eren", origin, second, &allowed)
                 .unwrap()
                 .is_none()
         );
-        game.execute("end_turn", Value::Nil).unwrap();
+        connection.command(&mut game, "end_turn", Value::Nil);
+        connection.receive();
         assert!(
             preview
-                .tap(&game, "eren", origin, second, &reachable(&game))
+                .tap(&mut connection, &mut game, "eren", origin, second, &allowed)
                 .unwrap()
                 .is_none(),
             "stale route cannot be confirmed"

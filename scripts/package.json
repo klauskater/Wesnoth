@@ -1,0 +1,29 @@
+{
+  "package_id": "wesnoth-port",
+  "package_version": "1",
+  "entry": "game.init",
+  "resource_roots": [
+    "adventures",
+    "dialogs",
+    "game",
+    "map_objects",
+    "maps",
+    "rules",
+    "scenarios",
+    "terrain",
+    "units"
+  ],
+  "protocol_version": 1,
+  "assets": {},
+  "modules": [
+    "game.init",
+    "game.rules.combat",
+    "game.presentation.effects",
+    "game.presentation.hud",
+    "game.presentation.interaction",
+    "game.presentation.presenter",
+    "game.rules.terrain",
+    "rules.basic_combat",
+    "rules.simple_ai"
+  ]
+}

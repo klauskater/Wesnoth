@@ -5,7 +5,7 @@ fn scripts() -> PathBuf {
 }
 #[test]
 fn loads_first_battle() {
-    let game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
+    let mut game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
     assert_eq!(game.snapshot().unwrap().map.cells.len(), 48);
     assert_eq!(
         game.map_tiles().get("grassland").unwrap().color,
@@ -69,7 +69,7 @@ fn loads_first_battle() {
             .unwrap()
     );
     assert_eq!(game.dialog(&game.start_dialog).unwrap().len(), 2);
-    assert_eq!(game.revision(), 0);
+    assert_eq!(game.revision(), 1);
 }
 
 #[test]

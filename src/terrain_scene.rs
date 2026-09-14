@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Component};
 
 use mlua::{Lua, LuaOptions, StdLib, Table};
 
 use crate::{
     engine::{Map, Position},
     terrain::visual_codes,
+    value::Value,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,6 +108,18 @@ impl TerrainScene {
     ) -> Result<Self, String> {
         let mut asset_paths = BTreeMap::new();
         for asset in assets {
+            let path = std::path::Path::new(&asset.path);
+            if asset.path.is_empty()
+                || path.is_absolute()
+                || path.components().any(|component| {
+                    matches!(
+                        component,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                })
+            {
+                return Err(format!("invalid sprite asset path: {}", asset.path));
+            }
             if asset_paths.insert(asset.id.clone(), asset.path).is_some() {
                 return Err(format!("duplicate sprite asset: {}", asset.id));
             }
@@ -173,6 +186,119 @@ impl TerrainScene {
     pub fn world(&self) -> &[PlacedSprite] {
         &self.world
     }
+
+    pub fn presentation(&self) -> Value {
+        let items = self
+            .ground
+            .iter()
+            .enumerate()
+            .map(|(order, sprite)| scene_item(sprite, "ground", order))
+            .chain(
+                self.world
+                    .iter()
+                    .enumerate()
+                    .map(|(order, sprite)| scene_item(sprite, "world", order)),
+            )
+            .collect();
+        Value::Map(BTreeMap::from([
+            ("schema".into(), Value::String("scene".into())),
+            ("items".into(), Value::List(items)),
+        ]))
+    }
+}
+
+fn scene_item(sprite: &PlacedSprite, layer: &str, order: usize) -> Value {
+    let mut fields = BTreeMap::from([
+        (
+            "id".into(),
+            Value::String(format!("terrain:{layer}:{order}")),
+        ),
+        (
+            "asset".into(),
+            Value::String(sprite.frames.assets[0].clone()),
+        ),
+        (
+            "frames".into(),
+            Value::List(
+                sprite
+                    .frames
+                    .assets
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        ),
+        (
+            "frame_ms".into(),
+            Value::Integer(i64::from(sprite.frames.frame_ms)),
+        ),
+        (
+            "phase_ms".into(),
+            Value::Integer(i64::from(sprite.frames.phase_ms)),
+        ),
+        (
+            "anchor".into(),
+            Value::Map(BTreeMap::from([
+                ("x".into(), Value::Integer(sprite.anchor.x)),
+                ("y".into(), Value::Integer(sprite.anchor.y)),
+            ])),
+        ),
+        (
+            "offset".into(),
+            Value::List(
+                sprite
+                    .offset
+                    .iter()
+                    .map(|value| Value::Number(f64::from(*value)))
+                    .collect(),
+            ),
+        ),
+        ("layer".into(), Value::String(layer.into())),
+        ("order".into(), Value::Integer(order as i64)),
+        (
+            "clips".into(),
+            Value::List(
+                sprite
+                    .clip_hexes
+                    .iter()
+                    .map(|position| {
+                        Value::Map(BTreeMap::from([
+                            ("x".into(), Value::Integer(position.x)),
+                            ("y".into(), Value::Integer(position.y)),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "masks".into(),
+            Value::List(
+                sprite
+                    .image_mods
+                    .masks
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        ),
+        (
+            "opacity".into(),
+            Value::Integer(i64::from(sprite.image_mods.opacity)),
+        ),
+    ]);
+    if let Some(crop) = sprite.image_mods.crop {
+        fields.insert(
+            "crop".into(),
+            Value::List(
+                crop.into_iter()
+                    .map(|value| Value::Integer(i64::from(value)))
+                    .collect(),
+            ),
+        );
+    }
+    Value::Map(fields)
 }
 
 fn run_script(
@@ -439,6 +565,16 @@ mod tests {
 
     #[test]
     fn validates_assets_and_orders_ground_by_layer_before_family() {
+        assert!(
+            TerrainScene::compile(
+                [SpriteAsset {
+                    id: "escape".into(),
+                    path: "../escape.png".into(),
+                }],
+                [],
+            )
+            .is_err()
+        );
         let mut front = sprite(TerrainPass::World, 0, 0);
         front.anchor.y = 2;
         let scene = TerrainScene::compile(

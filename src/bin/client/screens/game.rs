@@ -7,10 +7,13 @@ use macroquad::prelude::*;
 use wesnoth_engine::{engine::Position, game::Game, value::Value};
 
 use crate::{
+    connection::{Connection, Delivery},
+    declarative_ui,
     map_renderer::{MapRenderer, hex_center, terrain_info, time_tint},
     map_viewport::MapViewport,
     movement::{MoveAnimation, MovePreview},
-    sprite_renderer::SpriteRenderer,
+    scene::SpriteRenderer,
+    view::{Apply, View},
     village_renderer::VillageRenderer,
     widgets::Ui,
 };
@@ -31,6 +34,8 @@ pub struct GameScreen {
     battle: Option<crate::battle::BattleDialog>,
     battle_animation: Option<crate::battle::BattleAnimation>,
     game: Game,
+    connection: Connection,
+    view: View,
     map: MapRenderer,
     viewport: MapViewport,
     sprites: SpriteRenderer,
@@ -55,21 +60,40 @@ pub struct GameScreen {
 }
 
 impl GameScreen {
-    pub async fn new(game: Game) -> Result<Self, String> {
+    pub async fn new(mut game: Game) -> Result<Self, String> {
         let map = MapRenderer::new(game.map(), game.map_tiles());
         let (min, max) = map.bounds();
         let width = PANEL_WIDTH * panel_scale(vec2(screen_width(), screen_height()));
         let mut viewport =
             MapViewport::new(min, max, vec2(screen_width() - width, screen_height()));
         viewport.reserve_panel(width);
+        let mut connection = Connection::default();
+        connection.request_snapshot(&mut game);
+        let mut view = View::default();
+        for delivery in connection.receive() {
+            match delivery {
+                Delivery::ViewSnapshot(snapshot) => view.apply_snapshot(snapshot)?,
+                Delivery::Error(error) => return Err(error.message),
+                _ => return Err("unexpected initial connection delivery".into()),
+            }
+        }
+        let status = view
+            .block("status")
+            .cloned()
+            .ok_or_else(|| "presentation has no status block".to_owned())?;
+        let units = view
+            .block("objects")
+            .cloned()
+            .ok_or_else(|| "presentation has no objects block".to_owned())?;
+        let scene = view
+            .scene_block("scene")?
+            .ok_or_else(|| "presentation has no scene block".to_owned())?;
         let sprites = SpriteRenderer::load(
-            game.map(),
-            game.terrain_scripts(),
+            &scene,
+            game.scene_assets(),
             Path::new(env!("CARGO_MANIFEST_DIR")),
         )
         .await?;
-        let status = game.query("status", Value::Nil)?;
-        let units = game.query("snapshot", Value::Nil)?;
         let villages = VillageRenderer::load(game.map(), &status)?;
         let time_art = [
             include_bytes!("../../../../assets/wesnoth/ui/time-of-day/schedule-dawn.png")
@@ -131,6 +155,8 @@ impl GameScreen {
             battle: None,
             battle_animation: None,
             game,
+            connection,
+            view,
             map,
             viewport,
             sprites,
@@ -194,11 +220,17 @@ impl GameScreen {
                 self.tap_hex(target);
             }
         }
-        let reach_key = (self.selected_hex, self.game.revision());
+        let reach_key = (self.selected_hex, self.connection.world_revision());
         if !moving && self.reach_key != Some(reach_key) {
             self.move_preview.clear();
             self.reach_key = Some(reach_key);
-            match movement_range(&self.game, &self.units, &self.status, self.selected_hex) {
+            match movement_range(
+                &mut self.connection,
+                &mut self.game,
+                &self.units,
+                &self.status,
+                self.selected_hex,
+            ) {
                 Ok(cells) => self.reachable = cells,
                 Err(error) => {
                     self.reachable = None;
@@ -221,7 +253,7 @@ impl GameScreen {
         }
         self.map.draw_grid(&self.viewport, self.selected_hex);
         let defense = self.move_preview.path().last().and_then(|p| {
-            let terrain = self.game.map().get(*p).ok()?;
+            let terrain = wesnoth_engine::terrain::gameplay_type(self.game.map().raw(*p).ok()?);
             focused_unit(&self.units, &self.status, self.selected_hex)?
                 .get("defense")?
                 .get(terrain)?
@@ -382,8 +414,23 @@ impl GameScreen {
             self.move_preview.clear();
             self.selected_hex = None;
         }
-        if ui.button(&input, font, button(0.0), "Закончить ход", ready) {
-            self.execute("end_turn", Value::Nil);
+        let hud = match self.view.ui_block("hud") {
+            Ok(Some(node)) => Some(node),
+            Ok(None) => {
+                self.error = Some("presentation has no hud UI block".into());
+                None
+            }
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        };
+        if let Some(node) = hud {
+            match declarative_ui::draw(&ui, &input, font, &node, button(0.0), !moving) {
+                Ok(Some(action)) => self.execute(&action.action, action.payload),
+                Ok(None) => {}
+                Err(error) => self.error = Some(error),
+            }
         }
 
         if !moving && (modal || self.recruit_menu || self.error.is_some()) {
@@ -403,7 +450,12 @@ impl GameScreen {
                 if string(a, "id") != string(d, "id")
                     && string(a, "side") == string(&self.status, "active_side")
                 {
-                    match crate::battle::BattleDialog::open(&self.game, a, d) {
+                    match crate::battle::BattleDialog::open(
+                        &mut self.connection,
+                        &mut self.game,
+                        a,
+                        d,
+                    ) {
                         Ok(Some(dialog)) => {
                             self.move_preview.clear();
                             self.battle = Some(dialog);
@@ -443,10 +495,14 @@ impl GameScreen {
                 return;
             };
             let origin = self.selected_hex.unwrap();
-            match self
-                .move_preview
-                .tap(&self.game, string(unit, "id"), origin, target, reachable)
-            {
+            match self.move_preview.tap(
+                &mut self.connection,
+                &mut self.game,
+                string(unit, "id"),
+                origin,
+                target,
+                reachable,
+            ) {
                 Ok(Some(command)) => self.execute("move", command),
                 Ok(None) => {}
                 Err(error) => self.error = Some(error),
@@ -646,7 +702,7 @@ impl GameScreen {
     }
 
     fn execute(&mut self, action: &str, command: Value) {
-        match self.game.execute(action, command) {
+        match self.execute_connected(action, command) {
             Ok(events) => {
                 if action == "end_turn" {
                     self.replay = events
@@ -684,11 +740,20 @@ impl GameScreen {
                     }
                 }
                 self.dialog_line = 0;
-                match self.game.query("status", Value::Nil).and_then(|status| {
-                    self.game
-                        .query("snapshot", Value::Nil)
-                        .map(|units| (status, units))
-                }) {
+                let refresh = (|| {
+                    let status = self
+                        .view
+                        .block("status")
+                        .cloned()
+                        .ok_or_else(|| "presentation has no status block".to_owned())?;
+                    let units = self
+                        .view
+                        .block("objects")
+                        .cloned()
+                        .ok_or_else(|| "presentation has no objects block".to_owned())?;
+                    Ok::<_, String>((status, units))
+                })();
+                match refresh {
                     Ok((status, units)) => {
                         if !self.replay.is_empty() {
                             self.replay_final = Some((status, units));
@@ -707,9 +772,41 @@ impl GameScreen {
         }
     }
 
+    fn execute_connected(&mut self, action: &str, command: Value) -> Result<Vec<Value>, String> {
+        self.connection.command(&mut self.game, action, command);
+        let mut events = Vec::new();
+        let mut need_snapshot = false;
+        for delivery in self.connection.receive() {
+            match delivery {
+                Delivery::CommandResult(result) => {
+                    if let Some(error) = result.error {
+                        return Err(error.message);
+                    }
+                }
+                Delivery::ViewUpdate(update) => {
+                    events.extend(update.effects.iter().map(|effect| effect.content.clone()));
+                    need_snapshot |= self.view.apply_update(update)? == Apply::NeedSnapshot;
+                }
+                Delivery::ViewSnapshot(snapshot) => self.view.apply_snapshot(snapshot)?,
+                Delivery::Error(error) => return Err(error.message),
+            }
+        }
+        if need_snapshot {
+            self.connection.request_snapshot(&mut self.game);
+            for delivery in self.connection.receive() {
+                match delivery {
+                    Delivery::ViewSnapshot(snapshot) => self.view.apply_snapshot(snapshot)?,
+                    Delivery::Error(error) => return Err(error.message),
+                    _ => return Err("unexpected snapshot delivery".into()),
+                }
+            }
+        }
+        Ok(events)
+    }
+
     fn draw_modal(&mut self, font: &Font) {
         if let Some(dialog) = &mut self.battle {
-            match dialog.draw(font, self.game.revision()) {
+            match dialog.draw(font, self.connection.world_revision()) {
                 crate::battle::Action::None => {}
                 crate::battle::Action::Cancel => self.battle = None,
                 crate::battle::Action::Attack(command) => {
@@ -770,7 +867,7 @@ impl GameScreen {
             ) {
                 self.dialog_line += 1;
                 if self.dialog_line >= lines.len() {
-                    if let Err(error) = self.game.acknowledge_dialog() {
+                    if let Err(error) = self.execute_connected("dismiss_dialog", Value::Nil) {
                         self.error = Some(error);
                     }
                     self.dialog_line = 0;
@@ -860,7 +957,8 @@ impl GameScreen {
 
 // Recomputed on focus/state changes, never during camera movement or every frame.
 fn movement_range(
-    game: &Game,
+    connection: &mut Connection,
+    game: &mut Game,
     units: &Value,
     status: &Value,
     focus: Option<Position>,
@@ -871,7 +969,8 @@ fn movement_range(
     let Some(unit) = focused_unit(units, status, focus) else {
         return Ok(None);
     };
-    let cells = game.query(
+    let cells = connection.query(
+        game,
         "reachable",
         Value::Map(BTreeMap::from([
             ("object".into(), Value::String(string(unit, "id").into())),
@@ -998,11 +1097,12 @@ mod tests {
             "scenarios/first_battle.wml",
         )
         .unwrap();
+        let mut connection = Connection::default();
         game.acknowledge_dialog().unwrap();
         let status = game.query("status", Value::Nil).unwrap();
         let units = game.query("snapshot", Value::Nil).unwrap();
         let start = Some(Position { x: 2, y: 2 });
-        let range = movement_range(&game, &units, &status, start)
+        let range = movement_range(&mut connection, &mut game, &units, &status, start)
             .unwrap()
             .unwrap();
         assert!(range.contains(&(2, 2)));
@@ -1012,19 +1112,31 @@ mod tests {
             "occupied enemy hex is not a movement destination"
         );
         assert!(
-            movement_range(&game, &units, &status, None)
+            movement_range(&mut connection, &mut game, &units, &status, None)
                 .unwrap()
                 .is_none()
         );
         assert!(
-            movement_range(&game, &units, &status, Some(Position { x: 1, y: 1 }))
-                .unwrap()
-                .is_none()
+            movement_range(
+                &mut connection,
+                &mut game,
+                &units,
+                &status,
+                Some(Position { x: 1, y: 1 }),
+            )
+            .unwrap()
+            .is_none()
         );
         assert!(
-            movement_range(&game, &units, &status, Some(Position { x: 3, y: 2 }))
-                .unwrap()
-                .is_some(),
+            movement_range(
+                &mut connection,
+                &mut game,
+                &units,
+                &status,
+                Some(Position { x: 3, y: 2 }),
+            )
+            .unwrap()
+            .is_some(),
             "enemy inspection is supported"
         );
 
@@ -1046,7 +1158,7 @@ mod tests {
         let units = game.query("snapshot", Value::Nil).unwrap();
         let status = game.query("status", Value::Nil).unwrap();
         let focus = position(&destination);
-        let range = movement_range(&game, &units, &status, focus)
+        let range = movement_range(&mut connection, &mut game, &units, &status, focus)
             .unwrap()
             .unwrap();
         let p = focus.unwrap();

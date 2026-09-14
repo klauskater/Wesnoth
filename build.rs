@@ -116,10 +116,9 @@ fn collect(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
         let path = entry.unwrap().path();
         if path.is_dir() {
             collect(&path, files);
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "wml" || extension == "lua")
-        {
+        } else if path.extension().is_some_and(|extension| {
+            extension == "wml" || extension == "lua" || extension == "json"
+        }) {
             files.push(path);
         }
     }

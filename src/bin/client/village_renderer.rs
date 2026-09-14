@@ -237,7 +237,7 @@ mod tests {
             "guarded_castle",
             "return_to_the_village",
         ] {
-            let game = Game::load(
+            let mut game = Game::load(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"),
                 &format!("scenarios/{name}.wml"),
             )

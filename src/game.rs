@@ -1,25 +1,21 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use crate::{
-    engine::{Engine, Map, Object, World},
+    engine::{
+        Map, Object, World, persistence,
+        protocol::{Command, CommandStatus, Interaction},
+        resources::Package,
+        session::{Dispatch, InteractionDelivery, Session},
+    },
     map::{MapTiles, load_map},
-    terrain_scene::TerrainScript,
+    terrain_scene::{TerrainScene, TerrainScript},
     value::Value,
     wml::{self, Node},
 };
-use serde::{Deserialize, Serialize};
-
-const SAVE_VERSION: u32 = 1;
-
-#[derive(Deserialize, Serialize)]
-struct SavedGame {
-    version: u32,
-    scenario_path: String,
-    objects: BTreeMap<String, Object>,
-    state: BTreeMap<String, Value>,
-    random_state: u64,
-    pending_dialog: Option<String>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DialogLine {
@@ -31,13 +27,16 @@ pub struct Game {
     pub id: String,
     pub name: String,
     pub start_dialog: String,
-    engine: Engine,
+    engine: Session,
     map_tiles: MapTiles,
     terrain_scripts: Vec<TerrainScript>,
+    scene_assets: BTreeMap<String, String>,
     dialogs: BTreeMap<String, Vec<DialogLine>>,
     pending_dialog: Option<String>,
-    scenario_path: String,
-    revision: u64,
+    next_command_id: u64,
+    next_query_id: u64,
+    query_view_revision: u64,
+    latest_view: Option<crate::engine::protocol::ViewUpdate>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,6 +90,21 @@ impl Game {
         campaign: Option<&CampaignState>,
         read: &impl Fn(&str) -> Result<String, String>,
     ) -> Result<Self, String> {
+        Self::build_from(scenario_path, campaign, read, None)
+    }
+
+    fn build_from(
+        scenario_path: &str,
+        campaign: Option<&CampaignState>,
+        read: &impl Fn(&str) -> Result<String, String>,
+        saved: Option<&[u8]>,
+    ) -> Result<Self, String> {
+        let package = Package::open(read)?;
+        let package_identity = package.manifest().identity();
+        let mut package_assets: BTreeSet<_> = package.manifest().assets.keys().cloned().collect();
+        let entry = package.manifest().entry.clone();
+        let module_sources = package.module_sources()?;
+        let read = &|path: &str| package.read_text(path);
         let scenario_document = read_wml_from(scenario_path, read)?;
         let scenario = one_root(&scenario_document, "scenario")?;
         let resources = scenario.child("resources")?;
@@ -100,6 +114,8 @@ impl Game {
         let map = load_map(map_node)?;
         let (map_tiles, terrain_scripts) =
             crate::map::load_resources(&map, resources.attribute("map_objects")?, read)?;
+        let terrain_scene = TerrainScene::from_lua(&map, &terrain_scripts)?;
+        package_assets.extend(terrain_scene.assets().keys().cloned());
 
         let mut types = BTreeMap::new();
         let mut races = BTreeMap::new();
@@ -170,10 +186,13 @@ impl Game {
         }
 
         let dialogs = load_dialogs(&read_wml_from(resources.attribute("dialogs")?, read)?)?;
-        let rule_source = split_paths(resources.attribute("rules")?)
-            .map(read)
-            .collect::<Result<Vec<_>, _>>()?
-            .join("\n");
+        for path in split_paths(resources.attribute("rules")?) {
+            let module = path
+                .strip_suffix(".lua")
+                .ok_or_else(|| format!("rule module must end with .lua: {path}"))?
+                .replace('/', ".");
+            package.module(&module)?;
+        }
         let seed = parse_i64(scenario, "random_seed")? as u64;
 
         let unit_types = Value::Map(
@@ -224,32 +243,55 @@ impl Game {
             ("traits".into(), traits),
             ("recall".into(), Value::List(recall)),
             ("villages".into(), Value::List(villages)),
+            (
+                "pending_dialog".into(),
+                Value::String(scenario.attribute("on_start_dialog")?.into()),
+            ),
+            (
+                "session:scenario_path".into(),
+                Value::String(scenario_path.into()),
+            ),
+            ("presentation:scene".into(), terrain_scene.presentation()),
         ]);
         if let Some(campaign) = campaign {
             initial_state.extend(campaign.variables.clone());
         }
-        let mut engine = Engine::new(
-            World {
-                map,
-                objects,
-                state: initial_state,
-            },
-            seed,
-            rule_source,
-        )?;
-        engine.execute("initialize", Value::Nil)?;
-        if let (Some(campaign), Some(side)) = (campaign, scenario.attributes.get("campaign_side")) {
-            let key = format!("gold:{side}");
-            let starting = engine
-                .world
-                .state
-                .get(&key)
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            std::rc::Rc::make_mut(&mut engine.world)
-                .state
-                .insert(key, Value::Integer(starting.max(campaign.gold)));
-        }
+        let session_id = format!("{}:{scenario_path}", package_identity.package_id);
+        let world = World {
+            map,
+            objects,
+            state: initial_state,
+        };
+        let request = match (campaign, scenario.attributes.get("campaign_side")) {
+            (Some(campaign), Some(side)) => Value::Map(BTreeMap::from([
+                ("campaign_side".into(), Value::String(side.clone())),
+                ("campaign_gold".into(), Value::Integer(campaign.gold)),
+            ])),
+            _ => Value::Nil,
+        };
+        let engine = if let Some(bytes) = saved {
+            Session::restore_entry(
+                session_id,
+                package_identity,
+                package_assets,
+                world,
+                seed,
+                module_sources,
+                &entry,
+                bytes,
+            )?
+        } else {
+            Session::open(
+                session_id,
+                package_identity,
+                package_assets,
+                world,
+                seed,
+                module_sources,
+                &entry,
+                request,
+            )?
+        };
 
         Ok(Self {
             id: scenario.attribute("id")?.into(),
@@ -258,59 +300,61 @@ impl Game {
             engine,
             map_tiles,
             terrain_scripts,
+            scene_assets: terrain_scene.assets().clone(),
             dialogs,
             pending_dialog: Some(scenario.attribute("on_start_dialog")?.into()),
-            scenario_path: scenario_path.into(),
-            revision: 0,
+            next_command_id: 1,
+            next_query_id: 1,
+            query_view_revision: 0,
+            latest_view: None,
         })
     }
 
     pub fn save(&self) -> Result<String, String> {
-        let (objects, state, random_state) = self.engine.saved_state();
-        serde_json::to_string_pretty(&SavedGame {
-            version: SAVE_VERSION,
-            scenario_path: self.scenario_path.clone(),
-            objects,
-            state,
-            random_state,
-            pending_dialog: self.pending_dialog.clone(),
-        })
-        .map_err(|error| format!("cannot encode save: {error}"))
+        String::from_utf8(self.engine.save().map_err(|error| error.message)?)
+            .map_err(|error| format!("save is not UTF-8: {error}"))
     }
 
     pub fn load_save(scripts: impl AsRef<Path>, source: &str) -> Result<Self, String> {
-        let saved: SavedGame =
-            serde_json::from_str(source).map_err(|error| format!("cannot decode save: {error}"))?;
-        if saved.version != SAVE_VERSION {
-            return Err(format!(
-                "unsupported save version: {} (expected {SAVE_VERSION})",
-                saved.version
-            ));
-        }
-        let mut game = Self::load(scripts, &saved.scenario_path)?;
-        game.engine
-            .restore_state(saved.objects, saved.state, saved.random_state);
-        game.pending_dialog = saved.pending_dialog;
-        game.validate_restored_state()?;
-        Ok(game)
+        let scripts = fs::canonicalize(scripts.as_ref())
+            .map_err(|error| format!("cannot open scripts directory: {error}"))?;
+        Self::load_save_from(source, &|path| {
+            let requested = Path::new(path);
+            if requested.is_absolute() {
+                return Err(format!("resource path must be relative: {path}"));
+            }
+            let full = fs::canonicalize(scripts.join(requested))
+                .map_err(|error| format!("cannot read {path}: {error}"))?;
+            if !full.starts_with(&scripts) {
+                return Err(format!("resource path escapes scripts directory: {path}"));
+            }
+            fs::read_to_string(full).map_err(|error| format!("cannot read {path}: {error}"))
+        })
     }
 
     pub fn load_save_from(
         source: &str,
         read: &impl Fn(&str) -> Result<String, String>,
     ) -> Result<Self, String> {
-        let saved: SavedGame =
-            serde_json::from_str(source).map_err(|error| format!("cannot decode save: {error}"))?;
-        if saved.version != SAVE_VERSION {
-            return Err(format!(
-                "unsupported save version: {} (expected {SAVE_VERSION})",
-                saved.version
-            ));
-        }
-        let mut game = Self::load_from(&saved.scenario_path, read)?;
-        game.engine
-            .restore_state(saved.objects, saved.state, saved.random_state);
-        game.pending_dialog = saved.pending_dialog;
+        let package = Package::open(read)?;
+        let snapshot = persistence::decode(source.as_bytes(), &package.manifest().identity())
+            .map_err(|error| error.message)?;
+        let scenario_path = snapshot
+            .world
+            .state
+            .get("session:scenario_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "save has no scenario path".to_owned())?
+            .to_owned();
+        let pending_dialog = snapshot
+            .world
+            .state
+            .get("pending_dialog")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let mut game = Self::build_from(&scenario_path, None, read, Some(source.as_bytes()))
+            .map_err(|error| format!("invalid save state: {error}"))?;
+        game.pending_dialog = pending_dialog;
         game.validate_restored_state()?;
         Ok(game)
     }
@@ -318,7 +362,7 @@ impl Game {
     pub fn campaign_state(&self) -> Result<CampaignState, String> {
         let scenario = self
             .engine
-            .world
+            .world()
             .state
             .get("scenario")
             .and_then(Value::as_map)
@@ -329,7 +373,7 @@ impl Game {
             .ok_or_else(|| "scenario has no campaign_side".to_owned())?;
         let units = self
             .engine
-            .world
+            .world()
             .objects
             .values()
             .filter(|object| object.properties.get("side").and_then(Value::as_str) == Some(side))
@@ -338,7 +382,7 @@ impl Game {
                 values.insert("id".into(), Value::String(object.id.clone()));
                 Value::Map(values)
             })
-            .chain(match self.engine.world.state.get("recall") {
+            .chain(match self.engine.world().state.get("recall") {
                 Some(Value::List(units)) => units.clone(),
                 _ => Vec::new(),
             })
@@ -349,7 +393,7 @@ impl Game {
             .unwrap_or(0);
         let gold = self
             .engine
-            .world
+            .world()
             .state
             .get(&format!("gold:{side}"))
             .and_then(Value::as_i64)
@@ -358,7 +402,7 @@ impl Game {
             / 100;
         let variables = self
             .engine
-            .world
+            .world()
             .state
             .iter()
             .filter(|(key, _)| key.starts_with("campaign:"))
@@ -373,7 +417,7 @@ impl Game {
 
     pub fn next_scenario(&self) -> Option<&str> {
         self.engine
-            .world
+            .world()
             .state
             .get("scenario")?
             .get("next_scenario")?
@@ -394,48 +438,32 @@ impl Game {
         }
     }
 
-    pub fn snapshot(&self) -> Result<GameSnapshot, String> {
-        let objects = self.engine.query("snapshot", Value::Nil)?;
+    pub fn snapshot(&mut self) -> Result<GameSnapshot, String> {
+        let objects = self.query("snapshot", Value::Nil)?;
         Ok(GameSnapshot {
-            map: self.engine.world.map.clone(),
+            map: self.engine.world().map.clone(),
             objects,
         })
     }
 
-    pub fn map(&self) -> &Map {
-        &self.engine.world.map
+    pub fn view_snapshot(&mut self) -> Result<crate::engine::protocol::ViewSnapshot, String> {
+        self.engine.snapshot("local")
     }
 
-    pub fn map_tiles(&self) -> &MapTiles {
-        &self.map_tiles
+    pub fn take_view_update(&mut self) -> Option<crate::engine::protocol::ViewUpdate> {
+        self.latest_view.take()
     }
 
-    pub fn terrain_scripts(&self) -> &[TerrainScript] {
-        &self.terrain_scripts
-    }
-
-    pub fn query(&self, function: &str, command: Value) -> Result<Value, String> {
-        self.engine.query(function, command)
-    }
-
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    pub fn acknowledge_dialog(&mut self) -> Result<(), String> {
-        if self.pending_dialog.take().is_none() {
-            return Err("no dialog is waiting for the UI".into());
+    pub fn dispatch_command(&mut self, command: Command) -> Dispatch {
+        let dismissing_dialog = command.action == "dismiss_dialog";
+        let mut dispatch = self.engine.dispatch("local", command);
+        if dispatch.result.status != CommandStatus::Committed {
+            return dispatch;
         }
-        Ok(())
-    }
-
-    pub fn execute(&mut self, function: &str, command: Value) -> Result<Vec<Value>, String> {
-        if let Some(dialog) = &self.pending_dialog {
-            return Err(format!("dialog {dialog} is waiting for the UI"));
+        if dismissing_dialog {
+            self.pending_dialog = None;
         }
-        let result = self.engine.execute(function, command)?;
-        self.revision = self.revision.wrapping_add(1);
-        let mut events = match result {
+        let mut events = match dispatch.events.take().unwrap_or(Value::List(Vec::new())) {
             Value::List(events) => events,
             event => vec![event],
         };
@@ -446,8 +474,127 @@ impl Game {
                 .map(str::to_owned)
         }) {
             self.pending_dialog = Some(dialog.clone());
-            events.push(self.dialog_event(&dialog)?);
+            if let Ok(event) = self.dialog_event(&dialog) {
+                events.push(event);
+            }
         }
+        dispatch.events = Some(Value::List(events));
+        dispatch
+    }
+
+    pub fn interact(&mut self, interaction: Interaction) -> InteractionDelivery {
+        self.engine.interact("local", interaction)
+    }
+
+    pub fn map(&self) -> &Map {
+        &self.engine.world().map
+    }
+
+    pub fn map_tiles(&self) -> &MapTiles {
+        &self.map_tiles
+    }
+
+    pub fn terrain_scripts(&self) -> &[TerrainScript] {
+        &self.terrain_scripts
+    }
+
+    pub fn scene_assets(&self) -> &BTreeMap<String, String> {
+        &self.scene_assets
+    }
+
+    pub fn query(&mut self, action: &str, request: Value) -> Result<Value, String> {
+        let query_id = self.next_query_id;
+        self.next_query_id = self
+            .next_query_id
+            .checked_add(1)
+            .ok_or_else(|| "query id exhausted".to_owned())?;
+        let interaction_id = format!("query:{query_id}");
+        let delivery = self.engine.interact(
+            "query",
+            Interaction {
+                interaction_id: interaction_id.clone(),
+                expected_view_revision: self.query_view_revision,
+                kind: crate::engine::protocol::InteractionKind::Activate,
+                target: Value::Nil,
+                payload: Value::Map(BTreeMap::from([
+                    ("query".into(), Value::String(action.into())),
+                    ("payload".into(), request),
+                ])),
+            },
+        );
+        if let Some(error) = delivery.error {
+            return Err(error.message);
+        }
+        if delivery.command.is_some() {
+            return Err("query interaction unexpectedly produced a command".into());
+        }
+        let update = delivery
+            .view
+            .ok_or_else(|| "query interaction did not update the view".to_owned())?;
+        self.query_view_revision = update.view_revision;
+        let content = update
+            .replace_blocks
+            .into_iter()
+            .find(|block| block.id == "query")
+            .ok_or_else(|| "query interaction did not produce a query view block".to_owned())?
+            .content;
+        if content.get("interaction_id").and_then(Value::as_str) != Some(&interaction_id) {
+            return Err("query view block has a mismatched interaction id".into());
+        }
+        content
+            .get("value")
+            .cloned()
+            .ok_or_else(|| "query view block has no value".to_owned())
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.engine.world_revision()
+    }
+
+    pub fn acknowledge_dialog(&mut self) -> Result<(), String> {
+        if self.pending_dialog.is_none() {
+            return Err("no dialog is waiting for the UI".into());
+        }
+        let command_id = self.next_command_id;
+        self.next_command_id = self.next_command_id.saturating_add(1);
+        let dispatch = self.dispatch_command(Command {
+            command_id: format!("game:{command_id}"),
+            expected_world_revision: self.engine.world_revision(),
+            action: "dismiss_dialog".into(),
+            payload: Value::Nil,
+        });
+        if let Some(error) = dispatch.result.error {
+            return Err(error.message);
+        }
+        self.latest_view = dispatch.view;
+        Ok(())
+    }
+
+    pub fn execute(&mut self, function: &str, command: Value) -> Result<Vec<Value>, String> {
+        let command_id = self.next_command_id;
+        self.next_command_id = self
+            .next_command_id
+            .checked_add(1)
+            .ok_or_else(|| "command id exhausted".to_owned())?;
+        let dispatch = self.dispatch_command(Command {
+            command_id: format!("game:{command_id}"),
+            expected_world_revision: self.engine.world_revision(),
+            action: function.into(),
+            payload: command,
+        });
+        if dispatch.result.status == CommandStatus::Rejected {
+            return Err(dispatch
+                .result
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "command rejected".into()));
+        }
+        self.latest_view = dispatch.view;
+        let result = dispatch.events.unwrap_or(Value::List(Vec::new()));
+        let events = match result {
+            Value::List(events) => events,
+            event => vec![event],
+        };
         Ok(events)
     }
 
@@ -470,8 +617,6 @@ impl Game {
     }
 
     fn validate_restored_state(&self) -> Result<(), String> {
-        self.query("status", Value::Nil)
-            .map_err(|error| format!("invalid save state: {error}"))?;
         self.start_events()
             .map_err(|error| format!("invalid save dialog: {error}"))?;
         Ok(())
@@ -575,8 +720,36 @@ mod tests {
     fn successful_commands_advance_the_ui_revision() {
         let mut game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
         game.acknowledge_dialog().unwrap();
+        let before = game.revision();
         game.execute("end_turn", Value::Nil).unwrap();
-        assert_eq!(game.revision(), 1);
+        assert!(game.revision() > before);
+    }
+
+    #[test]
+    fn package_builds_generic_view_blocks() {
+        let mut game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
+        let view = game.view_snapshot().unwrap();
+        assert_eq!(
+            view.blocks
+                .iter()
+                .map(|block| block.id.as_str())
+                .collect::<Vec<_>>(),
+            ["hud", "objects", "scene", "status"]
+        );
+        let hud = view.blocks.iter().find(|block| block.id == "hud").unwrap();
+        let root = crate::engine::protocol::ui_block(&hud.content).unwrap();
+        assert_eq!(root.children[0].action.as_ref().unwrap().action, "end_turn");
+        let scene = view
+            .blocks
+            .iter()
+            .find(|block| block.id == "scene")
+            .unwrap();
+        let items = crate::engine::protocol::scene_block(&scene.content).unwrap();
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|item| {
+            matches!(item.layer.as_str(), "ground" | "world")
+                && item.frames.first() == Some(&item.asset)
+        }));
     }
 
     #[test]
@@ -595,14 +768,17 @@ mod tests {
     #[test]
     fn filesystem_loader_rejects_paths_outside_scripts() {
         let error = Game::load(scripts(), "../Cargo.toml").err().unwrap();
-        assert!(error.contains("escapes scripts directory"));
+        assert!(error.contains("invalid package path"));
     }
 
     #[test]
     fn load_save_rejects_invalid_restored_state() {
         let game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
         let mut save: serde_json::Value = serde_json::from_str(&game.save().unwrap()).unwrap();
-        save["state"].as_object_mut().unwrap().remove("scenario");
+        save["store"]["world"]["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove("scenario");
         let source = serde_json::to_string(&save).unwrap();
         let error = Game::load_save(scripts(), &source).err().unwrap();
         assert!(error.contains("invalid save state"));

@@ -1,3 +1,4 @@
+use crate::connection::Connection;
 use crate::widgets::Ui;
 use macroquad::prelude::*;
 use std::collections::BTreeMap;
@@ -8,8 +9,7 @@ pub fn string<'a>(v: &'a Value, k: &str) -> &'a str {
 }
 pub fn number(v: &Value, k: &str) -> f64 {
     v.get(k).map_or(0.0, |x| {
-        x.as_i64()
-            .map(|n| n as f64)
+        x.as_f64()
             .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
             .unwrap_or(0.0)
     })
@@ -41,10 +41,16 @@ pub enum Action {
     Attack(Value),
 }
 impl BattleDialog {
-    pub fn open(game: &Game, a: &Value, d: &Value) -> Result<Option<Self>, String> {
+    pub fn open(
+        connection: &mut Connection,
+        game: &mut Game,
+        a: &Value,
+        d: &Value,
+    ) -> Result<Option<Self>, String> {
         let attacker = string(a, "id");
         let defender = string(d, "id");
-        let available = game.query(
+        let available = connection.query(
+            game,
             "actions",
             Value::Map(BTreeMap::from([
                 ("object".into(), Value::String(attacker.into())),
@@ -60,7 +66,8 @@ impl BattleDialog {
         let mut choices = Vec::new();
         for weapon in available.get("attacks").map(list).unwrap_or(&[]) {
             if let Some(id) = weapon.as_str() {
-                let preview = game.query("preview_attack", command(attacker, defender, id))?;
+                let preview =
+                    connection.query(game, "preview_attack", command(attacker, defender, id))?;
                 if preview.get("disabled") != Some(&Value::Bool(true)) {
                     choices.push((id.into(), preview));
                 }
@@ -76,7 +83,7 @@ impl BattleDialog {
             selected: 0,
             detail: false,
             page: 0,
-            revision: game.revision(),
+            revision: connection.world_revision(),
             names: [
                 format!(
                     "{} · ЗД {}/{}",
@@ -461,6 +468,7 @@ mod tests {
             "scenarios/first_battle.wml",
         )
         .unwrap();
+        let mut connection = Connection::default();
         game.acknowledge_dialog().unwrap();
         let before = game.save().unwrap();
         let units = game.query("snapshot", Value::Nil).unwrap();
@@ -472,7 +480,9 @@ mod tests {
             .iter()
             .find(|u| string(u, "id") == "bob")
             .unwrap();
-        let dialog = BattleDialog::open(&game, a, d).unwrap().unwrap();
+        let dialog = BattleDialog::open(&mut connection, &mut game, a, d)
+            .unwrap()
+            .unwrap();
         assert!(dialog.choices.len() >= 2);
         for (_, preview) in dialog.choices {
             for key in ["attacker_outcomes", "defender_outcomes"] {

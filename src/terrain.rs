@@ -1065,7 +1065,10 @@ mod tests {
                     | VisualKind::CastleConcave(_)
                     | VisualKind::KeepConvex(_)
                     | VisualKind::KeepConcave(_)
-            ) || matches!(map.get(tile.position), Ok("castle" | "keep"))
+            ) || matches!(
+                map.raw(tile.position).map(gameplay_type),
+                Ok("castle" | "keep")
+            )
         }));
 
         let ruins = Map {

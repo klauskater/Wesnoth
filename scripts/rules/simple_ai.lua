@@ -343,3 +343,5 @@ local function simple_ai_turn(rules, context, cfg, viewer)
     end
     return events
 end
+
+return { turn = simple_ai_turn }

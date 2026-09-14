@@ -433,12 +433,7 @@ fn magical_marksman_slow_first_strike_drain_berserk_and_poison_are_lua_rules() {
     let number = |key: &str| {
         preview
             .get(key)
-            .and_then(|value| {
-                value
-                    .as_i64()
-                    .map(|value| value as f64)
-                    .or_else(|| value.as_str()?.parse().ok())
-            })
+            .and_then(|value| value.as_f64().or_else(|| value.as_str()?.parse().ok()))
             .unwrap()
     };
     let naive_damage = number("damage") * number("strikes") * number("chance") / 100.0;
@@ -791,7 +786,7 @@ fn reachable_cells_respect_points_and_impassable_terrain() {
             x: values["x"].as_i64().unwrap(),
             y: values["y"].as_i64().unwrap(),
         };
-        snapshot.map.get(position).unwrap() != "water"
+        wesnoth_engine::terrain::gameplay_type(snapshot.map.raw(position).unwrap()) != "water"
             && cell.get("cost").and_then(Value::as_i64).unwrap() <= 6
     }));
 }
@@ -1173,10 +1168,11 @@ fn outpost_recruitment_spends_gold_and_uses_castle_hexes() {
         game.snapshot()
             .unwrap()
             .map
-            .get(Position {
+            .raw(Position {
                 x: position["x"].as_i64().unwrap(),
                 y: position["y"].as_i64().unwrap(),
             })
+            .map(wesnoth_engine::terrain::gameplay_type)
             .unwrap(),
         "castle"
     );
@@ -1317,7 +1313,7 @@ fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
 
 #[test]
 fn imported_chase_has_the_original_map_and_three_factions() {
-    let game = the_chase();
+    let mut game = the_chase();
     assert_eq!(game.id, "02_the_chase");
     let Value::List(objects) = game.snapshot().unwrap().objects else {
         panic!()
@@ -1340,7 +1336,7 @@ fn imported_chase_has_the_original_map_and_three_factions() {
 
 #[test]
 fn chase_discovers_villages_from_map_terrain() {
-    let game = the_chase();
+    let mut game = the_chase();
     let status = game.query("status", Value::Nil).unwrap();
     let villages = value_list_for_test(&status, "villages");
     assert_eq!(villages.len(), 17);
@@ -1349,7 +1345,7 @@ fn chase_discovers_villages_from_map_terrain() {
 
 #[test]
 fn chase_uses_upstream_unit_types_and_summons_are_reserved() {
-    let game = the_chase();
+    let mut game = the_chase();
     let Value::List(objects) = game.snapshot().unwrap().objects else {
         panic!()
     };
@@ -1444,7 +1440,7 @@ fn campaign_state_survives_the_whole_campaign() {
     .unwrap();
 
     let third_state = third.campaign_state().unwrap();
-    let fourth = Game::load_with_campaign(
+    let mut fourth = Game::load_with_campaign(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
         "scenarios/return_to_the_village.wml",
         Some(&third_state),
@@ -1624,7 +1620,7 @@ fn forest_ambush_hides_until_an_enemy_moves_adjacent() {
 
 #[test]
 fn loads_generated_core_unit_catalog_across_races() {
-    let game = Game::load(
+    let mut game = Game::load(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
         "scenarios/core_units_test.wml",
     )
@@ -1738,42 +1734,32 @@ fn ai_actions_carry_ordered_animation_snapshots() {
 
 #[test]
 fn terrain_search_uses_unit_costs_for_mountains_and_deep_water() {
+    use std::collections::{BTreeMap, BTreeSet};
     use wesnoth_engine::{
-        engine::Map,
+        engine::hex::Bounds,
         pathfinding::{SearchRequest, search},
     };
-    let map = Map {
-        width: 3,
-        height: 1,
-        cells: ["Gg", "Mm", "Wo"].map(String::from).to_vec(),
-    };
+    let middle = Position { x: 2, y: 1 };
     let mut request = SearchRequest {
-        start: Position { x: 1, y: 1 },
+        bounds: Bounds::new(3, 1).unwrap(),
+        origin: Position { x: 1, y: 1 },
         budget: 5,
-        max_step: 5,
-        costs: [
-            ("grassland".into(), 1),
-            ("hills".into(), 2),
-            ("water".into(), 3),
-            ("mountains".into(), 99),
-            ("deep_water".into(), 99),
-        ]
-        .into(),
-        blocked: vec![],
-        occupied: vec![],
-        stop_near: vec![],
-        destination: None,
-        paths: true,
+        costs: BTreeMap::from([
+            (Position { x: 1, y: 1 }, 1),
+            (middle, 1),
+            (Position { x: 3, y: 1 }, 1),
+        ]),
+        blocked: BTreeSet::from([middle]),
+        stop_cells: BTreeSet::new(),
     };
-    assert!(search(&map, &request).unwrap().is_empty());
-    request.costs.insert("mountains".into(), 1);
-    request.costs.insert("deep_water".into(), 1);
-    assert_eq!(search(&map, &request).unwrap().len(), 2);
+    assert_eq!(search(&request).unwrap().costs.len(), 1);
+    request.blocked.clear();
+    assert_eq!(search(&request).unwrap().costs.len(), 3);
 }
 
 #[test]
 fn initial_undead_keep_mandatory_race_immunities() {
-    let game = rooting_out_a_mage();
+    let mut game = rooting_out_a_mage();
     let snapshot = game.snapshot().unwrap();
     let Value::List(units) = snapshot.objects else {
         panic!("unit snapshot expected")

@@ -1,4 +1,6 @@
 local combat = {}
+local simple_ai = require("rules.simple_ai")
+local terrain = require("game.rules.terrain")
 
 local function children(node, name)
     return node.__children and node.__children[name] or {}
@@ -1273,7 +1275,7 @@ end
 
 function combat.preview_attack(context, command)
     local model, _, _, result = prepare_battle(context, command)
-    -- Metadata stays in Lua; the native kernel only receives scalar combat inputs.
+    -- Forecast consumes only prepared scalar inputs and never touches game RNG.
     model.attacker.metadata, model.defender.metadata = nil, nil
     model.attacker.plague, model.defender.plague = nil, nil
     local forecast = context.combat:forecast(model)
@@ -1466,7 +1468,7 @@ apply_traits = function(context, object)
     object.traits_applied = true
 end
 
-function combat.initialize(context)
+function combat.initialize(context, request)
     local occupied = {}
     local reserves = {}
     for _, object in ipairs(context.objects:all()) do
@@ -1532,7 +1534,11 @@ function combat.initialize(context)
     end
     context.state:set("villages", villages)
     for _, side in ipairs(children(scenario(context), "side")) do
-        context.state:set("gold:" .. side.id, side.gold or 0)
+        local gold = side.gold or 0
+        if request and request.campaign_side == side.id then
+            gold = math.max(gold, assert(request.campaign_gold))
+        end
+        context.state:set("gold:" .. side.id, gold)
     end
     update_shroud(context)
     local first_phase = children(scenario(context), "phase")[1]
@@ -2111,27 +2117,63 @@ function combat.reachable(context, command)
     local function allied_with_object(side)
         return side == object.side or (teams[object.side] ~= nil and teams[side] == teams[object.side])
     end
-    local occupied, occupied_keys, blocked, stop_near = {}, {}, {}, {}
+    local occupied_keys, blocked, stop_cells, stop_keys = {}, {}, {}, {}
     local ignores_zoc = ability(object, "skirmisher") ~= nil
     for _, other in ipairs(context.objects:all({ "side", "position", "hitpoints", "level", "petrified", "stunned" })) do
         if other.id ~= object.id then
-            occupied[#occupied + 1] = other.position
             occupied_keys[position_key(other.position)] = true
             if not allied_with_object(other.side) then
                 blocked[#blocked + 1] = other.position
                 if not ignores_zoc and other.hitpoints > 0 and not other.petrified
                     and not other.stunned and (other.level or 0) > 0 then
-                    stop_near[#stop_near + 1] = other.position
+                    for _, position in ipairs(context.map:neighbors(other.position)) do
+                        local key = position_key(position)
+                        if key ~= position_key(object.position) and not stop_keys[key] then
+                            stop_keys[key] = true
+                            stop_cells[#stop_cells + 1] = position
+                        end
+                    end
                 end
             end
         end
     end
-    local result = context.map:search {
-        start = object.position, budget = movement_points, max_step = object.max_moves,
-        costs = child(object, "movement_costs"), occupied = occupied,
-        blocked = blocked, stop_near = stop_near,
-        destination = command.destination, paths = command.paths ~= false,
+    local movement_costs, costs = child(object, "movement_costs"), {}
+    for _, cell in ipairs(context.map:cells()) do
+        local cost = movement_costs[terrain.kind(cell.value)]
+        if cost and cost <= object.max_moves then
+            costs[#costs + 1] = { position = cell.position, cost = cost }
+        else
+            blocked[#blocked + 1] = cell.position
+        end
+    end
+    local native = context.map:search {
+        origin = object.position, budget = movement_points, costs = costs,
+        blocked = blocked, stop_cells = stop_cells,
     }
+    local predecessors = {}
+    for _, item in ipairs(native.predecessors) do
+        predecessors[position_key(item.position)] = item.predecessor
+    end
+    local result, start_key = {}, position_key(object.position)
+    for _, item in ipairs(native.costs) do
+        local key = position_key(item.position)
+        if key ~= start_key and not occupied_keys[key]
+            and (not command.destination or position_key(command.destination) == key) then
+            local path
+            if command.paths ~= false then
+                path = {}
+                local cursor = item.position
+                while position_key(cursor) ~= start_key do
+                    table.insert(path, 1, cursor)
+                    cursor = assert(predecessors[position_key(cursor)], "missing predecessor")
+                end
+            end
+            result[#result + 1] = {
+                position = item.position, cost = item.cost,
+                zoc = stop_keys[key] == true, path = path,
+            }
+        end
+    end
 
     -- Teleport is a game rule, retaining its existing direct-village semantics.
     if movement_points > 0 and ability(object, "teleport") then
@@ -2185,7 +2227,7 @@ function combat.end_turn(context)
         events[#events + 1] = { type = "turn_started", turn = context.state:get("turn"), side = side.id }
         for _, event in ipairs(start_side(context, side.id)) do events[#events + 1] = event end
         if side.controller == "ai" then
-            for _, event in ipairs(simple_ai_turn(combat, context, side, current)) do
+            for _, event in ipairs(simple_ai.turn(combat, context, side, current)) do
                 events[#events + 1] = event
                 if event.type == "scenario_finished" then return events end
             end

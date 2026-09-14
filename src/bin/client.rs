@@ -1,18 +1,24 @@
 #[path = "client/battle.rs"]
 mod battle;
+#[path = "client/connection.rs"]
+mod connection;
 use macroquad::prelude::*;
 use wesnoth_engine::{adventure::Adventure, game::Game};
 
+#[path = "client/ui.rs"]
+mod declarative_ui;
 #[path = "client/map_renderer.rs"]
 mod map_renderer;
 #[path = "client/map_viewport.rs"]
 mod map_viewport;
 #[path = "client/movement.rs"]
 mod movement;
+#[path = "client/scene.rs"]
+mod scene;
 #[path = "client/screens/mod.rs"]
 mod screens;
-#[path = "client/sprite_renderer.rs"]
-mod sprite_renderer;
+#[path = "client/view.rs"]
+mod view;
 #[path = "client/village_renderer.rs"]
 mod village_renderer;
 #[path = "client/widgets.rs"]

@@ -1,9 +1,15 @@
+//! Scene block preparation and rendering.
+//!
+//! Contract: `contracts/target/modules/client/scene.md`.
+
 use std::{collections::BTreeMap, path::Path};
 
 use macroquad::prelude::*;
+#[cfg(test)]
+use wesnoth_engine::terrain_scene::TerrainScene;
 use wesnoth_engine::{
-    engine::Map,
-    terrain_scene::{ImageModifiers, PlacedSprite, TerrainScene, TerrainScript},
+    engine::protocol::SceneItem,
+    terrain_scene::{ImageModifiers, PlacedSprite, SpriteFrames, TerrainPass},
 };
 
 use crate::{map_renderer::hex_center, map_viewport::MapViewport};
@@ -20,6 +26,7 @@ struct DrawCommand {
     position: Vec2,
     frames: PreparedFrames,
     clip_hexes: Vec<Vec2>,
+    tint: Color,
 }
 
 enum PreparedFrames {
@@ -37,11 +44,23 @@ struct Frame {
 }
 
 impl SpriteRenderer {
-    pub async fn load(map: &Map, scripts: &[TerrainScript], root: &Path) -> Result<Self, String> {
-        let scene = TerrainScene::from_lua(map, scripts)?;
+    pub async fn load(
+        items: &[SceneItem],
+        assets: &BTreeMap<String, String>,
+        root: &Path,
+    ) -> Result<Self, String> {
+        if let Some(item) = items
+            .iter()
+            .find(|item| item.layer != "ground" && item.layer != "world")
+        {
+            return Err(format!(
+                "scene item {} uses unsupported layer: {}",
+                item.id, item.layer
+            ));
+        }
         let mut textures = Vec::new();
         let mut images = BTreeMap::new();
-        for (id, relative) in scene.assets() {
+        for (id, relative) in assets {
             let path = root.join(relative);
             let path = path
                 .to_str()
@@ -51,9 +70,29 @@ impl SpriteRenderer {
                 .map_err(|error| format!("cannot load sprite {id} from {path}: {error}"))?;
             images.insert(id.clone(), image);
         }
+        let mut ground = scene_items(items, "ground")?;
+        let mut world = scene_items(items, "world")?;
+        ground.sort_by_key(|(order, id, _, _)| (*order, id.clone()));
+        world.sort_by_key(|(order, id, _, _)| (*order, id.clone()));
+        let (ground, ground_tints): (Vec<_>, Vec<_>) = ground
+            .into_iter()
+            .map(|(_, _, sprite, tint)| (sprite, tint))
+            .unzip();
+        let (world, world_tints): (Vec<_>, Vec<_>) = world
+            .into_iter()
+            .map(|(_, _, sprite, tint)| (sprite, tint))
+            .unzip();
         let mut cache = BTreeMap::new();
-        let ground = prepare(scene.ground(), &images, &mut textures, &mut cache)?;
-        let world = prepare(scene.world(), &images, &mut textures, &mut cache)?;
+        let mut ground = prepare(&ground, &images, &mut textures, &mut cache)?;
+        let mut world = prepare(&world, &images, &mut textures, &mut cache)?;
+        ground
+            .iter_mut()
+            .zip(ground_tints)
+            .for_each(|(command, tint)| command.tint = tint);
+        world
+            .iter_mut()
+            .zip(world_tints)
+            .for_each(|(command, tint)| command.tint = tint);
         Ok(Self {
             textures,
             ground,
@@ -75,6 +114,12 @@ impl SpriteRenderer {
 
     fn draw(&self, command: &DrawCommand, viewport: &MapViewport, elapsed_ms: u64, tint: Color) {
         let frame = command.frames.at(elapsed_ms);
+        let tint = Color::new(
+            tint.r * command.tint.r,
+            tint.g * command.tint.g,
+            tint.b * command.tint.b,
+            tint.a * command.tint.a,
+        );
         let texture = &self.textures[frame.texture];
         let screen = vec2(screen_width(), screen_height());
         let position = viewport.project(command.position, screen);
@@ -143,6 +188,56 @@ impl SpriteRenderer {
     }
 }
 
+fn scene_items(
+    items: &[SceneItem],
+    layer: &str,
+) -> Result<Vec<(i64, String, PlacedSprite, Color)>, String> {
+    items
+        .iter()
+        .filter(|item| item.layer == layer)
+        .map(|item| {
+            let offset = [item.offset[0] as f32, item.offset[1] as f32];
+            if offset.iter().any(|value| !value.is_finite()) {
+                return Err(format!("scene item {} offset exceeds f32", item.id));
+            }
+            Ok((
+                item.order,
+                item.id.clone(),
+                PlacedSprite {
+                    family: item.id.clone(),
+                    pass: if layer == "ground" {
+                        TerrainPass::Ground
+                    } else {
+                        TerrainPass::World
+                    },
+                    anchor: item.anchor,
+                    offset,
+                    baseline: 0.0,
+                    family_order: 0,
+                    local_order: 0,
+                    frames: SpriteFrames {
+                        assets: item.frames.clone(),
+                        frame_ms: item.frame_ms,
+                        phase_ms: item.phase_ms,
+                    },
+                    clip_hexes: item.clips.clone(),
+                    image_mods: ImageModifiers {
+                        crop: item.crop,
+                        masks: item.masks.clone(),
+                        opacity: item.opacity,
+                    },
+                },
+                Color::new(
+                    item.tint[0] as f32,
+                    item.tint[1] as f32,
+                    item.tint[2] as f32,
+                    item.tint[3] as f32,
+                ),
+            ))
+        })
+        .collect()
+}
+
 fn clip_to_rect(mut points: Vec<Vec2>, min: Vec2, max: Vec2) -> Vec<Vec2> {
     for (axis, edge, sign) in [
         (0, min.x, 1.0),
@@ -203,7 +298,10 @@ fn prepare(
                 let texture = if let Some(index) = cache.get(&key) {
                     *index
                 } else {
-                    let image = modify_image(&images[asset], &sprite.image_mods, images)?;
+                    let source = images
+                        .get(asset)
+                        .ok_or_else(|| format!("missing scene asset: {asset}"))?;
+                    let image = modify_image(source, &sprite.image_mods, images)?;
                     let texture = Texture2D::from_image(&image);
                     texture.set_filter(FilterMode::Nearest);
                     let index = textures.len();
@@ -235,6 +333,7 @@ fn prepare(
                     .iter()
                     .map(|p| hex_center(p.x, p.y))
                     .collect(),
+                tint: WHITE,
             })
         })
         .collect()

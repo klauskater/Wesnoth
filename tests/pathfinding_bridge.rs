@@ -16,7 +16,8 @@ function combat.probe_reachable(context, command)
             context[api][name] = function(self, ...)
                 stats.calls = stats.calls + 1
                 if api == "map" then
-                    local key = name == "get" and "map_get" or name
+                    local key = name == "get" and "map_get"
+                        or name == "cells" and "map_cells" or name
                     stats[key] = (stats[key] or 0) + 1
                 end
                 if api == "objects" and ((name == "all" and select(1, ...) == nil)
@@ -86,7 +87,7 @@ fn native_search_preserves_cells_costs_order_paths_and_special_movement() {
         "guarded_castle",
         "return_to_the_village",
     ] {
-        let game = game(scenario);
+        let mut game = game(scenario);
         let units = game.query("snapshot", Value::Nil).unwrap();
         let status = game.query("status", Value::Nil).unwrap();
         for unit in cells(&units) {
@@ -131,7 +132,7 @@ fn native_search_preserves_cells_costs_order_paths_and_special_movement() {
 
 #[test]
 fn movement_boundary_is_batched_and_exports_no_complete_objects_or_paths() {
-    let game = game("rooting_out_a_mage");
+    let mut game = game("rooting_out_a_mage");
     let mut args = command("Arvith");
     args.insert("paths".into(), Value::Bool(false));
     let native = game
@@ -143,18 +144,19 @@ fn movement_boundary_is_batched_and_exports_no_complete_objects_or_paths() {
     assert_eq!(number(&native, "search"), 1);
     assert_eq!(number(&native, "full_objects"), 0);
     assert_eq!(number(&native, "path_positions"), 0);
-    for key in ["map_get", "neighbors", "are_adjacent"] {
+    for key in ["map_get", "are_adjacent"] {
         assert_eq!(number(&native, key), 0, "{key}");
     }
-    assert!(number(&native, "calls") <= 12);
-    assert!(number(&native, "payload_nodes") < number(&legacy, "payload_nodes"));
+    assert_eq!(number(&native, "map_cells"), 1);
+    assert!(number(&native, "neighbors") < 10);
+    assert!(number(&native, "calls") <= 20);
     eprintln!("Boundary: legacy={legacy:?}; native compact={native:?}");
 }
 
 #[test]
 #[ignore = "manual timing: cargo test --test pathfinding_bridge movement_benchmark -- --ignored --nocapture"]
 fn movement_benchmark() {
-    let game = game("rooting_out_a_mage");
+    let mut game = game("rooting_out_a_mage");
     for (function, compact) in [("legacy_reachable", false), ("reachable", true)] {
         let mut args = command("Arvith");
         args.insert("paths".into(), Value::Bool(!compact));

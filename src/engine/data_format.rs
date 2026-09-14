@@ -1,3 +1,8 @@
+//! Syntax-only parsing for declarative game-package data.
+//!
+//! Unknown game tags remain valid; semantic typing belongs to Lua. Contract:
+//! `contracts/target/modules/engine/data_format.md`.
+
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq)]
