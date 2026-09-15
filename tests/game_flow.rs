@@ -1425,14 +1425,14 @@ fn campaign_state_survives_the_whole_campaign() {
     first.acknowledge_dialog().unwrap();
     let first_state = first.campaign_state().unwrap();
 
-    let second = Game::load_with_campaign(
+    let mut second = Game::load_with_campaign(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
         "scenarios/the_chase.wml",
         Some(&first_state),
     )
     .unwrap();
     let second_state = second.campaign_state().unwrap();
-    let third = Game::load_with_campaign(
+    let mut third = Game::load_with_campaign(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
         "scenarios/guarded_castle.wml",
         Some(&second_state),
@@ -1483,7 +1483,7 @@ fn return_to_the_village_opens_with_both_brothers_and_no_next_chapter() {
     let snapshot = game.snapshot().unwrap();
     assert_eq!((snapshot.map.width, snapshot.map.height), (28, 33));
     assert_eq!(status.get("turn_limit"), Some(&Value::Integer(26)));
-    assert_eq!(game.next_scenario(), None);
+    assert_eq!(game.next_scenario().unwrap(), None);
     assert!(matches!(status.get("fog"), Some(Value::Bool(true))));
     let visible = value_list_for_test(&status, "visible_units");
     assert!(visible.iter().any(|unit| unit.as_str() == Some("Arvith")));

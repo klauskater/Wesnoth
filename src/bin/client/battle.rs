@@ -1,8 +1,7 @@
-use crate::connection::Connection;
 use crate::widgets::Ui;
 use macroquad::prelude::*;
 use std::collections::BTreeMap;
-use wesnoth_engine::{game::Game, value::Value};
+use wesnoth_engine::value::Value;
 
 pub fn string<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("")
@@ -41,49 +40,50 @@ pub enum Action {
     Attack(Value),
 }
 impl BattleDialog {
-    pub fn open(
-        connection: &mut Connection,
-        game: &mut Game,
-        a: &Value,
-        d: &Value,
-    ) -> Result<Option<Self>, String> {
-        let attacker = string(a, "id");
-        let defender = string(d, "id");
-        let available = connection.query(
-            game,
-            "actions",
-            Value::Map(BTreeMap::from([
-                ("object".into(), Value::String(attacker.into())),
-                ("paths".into(), Value::Bool(false)),
-            ])),
-        )?;
-        if !available
-            .get("targets")
-            .is_some_and(|v| list(v).iter().any(|x| x.as_str() == Some(defender)))
-        {
-            return Ok(None);
-        }
+    pub fn from_view(value: &Value, units: &Value, revision: u64) -> Result<Self, String> {
+        let attacker = value
+            .get("attacker")
+            .and_then(Value::as_str)
+            .ok_or("attack block has no attacker")?;
+        let defender = value
+            .get("defender")
+            .and_then(Value::as_str)
+            .ok_or("attack block has no defender")?;
+        let a = list(units)
+            .iter()
+            .find(|unit| string(unit, "id") == attacker)
+            .ok_or("attack block references an unknown attacker")?;
+        let d = list(units)
+            .iter()
+            .find(|unit| string(unit, "id") == defender)
+            .ok_or("attack block references an unknown defender")?;
+        let Value::List(presented) = value.get("choices").ok_or("attack block has no choices")?
+        else {
+            return Err("attack choices must be a list".into());
+        };
         let mut choices = Vec::new();
-        for weapon in available.get("attacks").map(list).unwrap_or(&[]) {
-            if let Some(id) = weapon.as_str() {
-                let preview =
-                    connection.query(game, "preview_attack", command(attacker, defender, id))?;
-                if preview.get("disabled") != Some(&Value::Bool(true)) {
-                    choices.push((id.into(), preview));
-                }
-            }
+        for choice in presented {
+            let weapon = choice
+                .get("weapon")
+                .and_then(Value::as_str)
+                .ok_or("attack choice has no weapon")?;
+            let preview = choice
+                .get("preview")
+                .cloned()
+                .ok_or("attack choice has no preview")?;
+            choices.push((weapon.into(), preview));
         }
         if choices.is_empty() {
-            return Ok(None);
+            return Err("attack block has no enabled choices".into());
         }
-        Ok(Some(Self {
+        Ok(Self {
             attacker: attacker.into(),
             defender: defender.into(),
             choices,
             selected: 0,
             detail: false,
             page: 0,
-            revision: connection.world_revision(),
+            revision,
             names: [
                 format!(
                     "{} · ЗД {}/{}",
@@ -98,7 +98,7 @@ impl BattleDialog {
                     number(d, "max_hitpoints")
                 ),
             ],
-        }))
+        })
     }
     pub fn draw(&mut self, font: &Font, revision: u64) -> Action {
         let ui = Ui::new();
@@ -461,28 +461,61 @@ impl BattleArt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::{Connection, Delivery};
+    use std::path::Path;
+    use wesnoth_engine::{engine::protocol::InteractionKind, game::Game};
+
+    fn position(x: i64, y: i64) -> Value {
+        Value::Map(BTreeMap::from([
+            ("x".into(), Value::Integer(x)),
+            ("y".into(), Value::Integer(y)),
+        ]))
+    }
+
     #[test]
-    fn weapon_dialog_queries_without_changing_world_or_rng() {
+    fn weapon_dialog_is_built_from_the_attack_view_without_changing_world_or_rng() {
         let mut game = Game::load(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"),
             "scenarios/first_battle.wml",
         )
         .unwrap();
         let mut connection = Connection::default();
-        game.acknowledge_dialog().unwrap();
+        connection.request_snapshot(&mut game);
+        connection.receive();
+        connection.command(&mut game, "dismiss_dialog", Value::Nil);
+        connection.receive();
         let before = game.save().unwrap();
-        let units = game.query("snapshot", Value::Nil).unwrap();
-        let a = list(&units)
+
+        connection.interaction(
+            &mut game,
+            InteractionKind::CellClick,
+            position(2, 2),
+            Value::Nil,
+        );
+        connection.receive();
+        connection.interaction(
+            &mut game,
+            InteractionKind::CellClick,
+            position(3, 2),
+            Value::Nil,
+        );
+        let deliveries = connection.receive();
+        let Delivery::ViewUpdate(update) = &deliveries[0] else {
+            panic!("enemy click must update the attack view")
+        };
+        let attack = update
+            .replace_blocks
             .iter()
-            .find(|u| string(u, "id") == "alice")
+            .find(|block| block.id == "attack")
             .unwrap();
-        let d = list(&units)
+        let units = update
+            .replace_blocks
             .iter()
-            .find(|u| string(u, "id") == "bob")
+            .find(|block| block.id == "objects")
             .unwrap();
-        let dialog = BattleDialog::open(&mut connection, &mut game, a, d)
-            .unwrap()
-            .unwrap();
+        let dialog =
+            BattleDialog::from_view(&attack.content, &units.content, connection.world_revision())
+                .unwrap();
         assert!(dialog.choices.len() >= 2);
         for (_, preview) in dialog.choices {
             for key in ["attacker_outcomes", "defender_outcomes"] {

@@ -1,8 +1,12 @@
 # Контракт lua/presenter
 
 Статус: **частично реализован**. Редакция проекта: 1. Read-only presenter строит
-стабильные status/objects/HUD блоки, статическую terrain scene и эффекты. Динамические
-scene items, viewer-фильтрация и остальные панели ещё переносятся.
+стабильные status/objects/HUD/time блоки, статические terrain scene/map/asset registry,
+диалоги, эффекты, выбранную клетку с готовыми названием местности и строками
+юнита, навигацию к следующему доступному юниту, маршрут с уже вычисленной
+защитой и attack-блок с допустимым
+оружием и read-only прогнозами боя, summary, unit и recruit UiNode-блоки.
+Динамические scene items, viewer-фильтрация и остальные панели ещё переносятся.
 Поставщик: `scripts/game/presentation/presenter.lua`.
 [Карточка модуля](../../../../design/architecture/modules/lua/presenter.md).
 Обязательны [общие соглашения](../../common.md) и [поток сообщений](../../stream.md).

@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 
 use macroquad::prelude::*;
 use wesnoth_engine::{
-    engine::{Map, Position},
-    map::MapTiles,
+    engine::Position,
     terrain::{gameplay_type, visual_codes},
+    value::Value,
 };
 
 use crate::map_viewport::MapViewport;
@@ -26,22 +26,49 @@ pub struct MapRenderer {
 }
 
 impl MapRenderer {
-    pub fn new(map: &Map, tiles: &MapTiles) -> Self {
-        let mut cells = Vec::with_capacity(map.cells.len());
-        for y in 1..=map.height as i64 {
-            for x in 1..=map.width as i64 {
-                let code = map.raw(wesnoth_engine::engine::Position { x, y }).unwrap();
-                let color = tiles
-                    .get(code)
-                    .map(|tile| Color::from_rgba(tile.color[0], tile.color[1], tile.color[2], 255))
-                    .unwrap_or(MAGENTA);
-                cells.push(Cell {
-                    position: Position { x, y },
-                    center: hex_center(x, y),
-                    color,
-                    code: code.to_owned(),
-                });
-            }
+    pub fn from_view(value: &Value) -> Result<Self, String> {
+        if value.get("schema").and_then(Value::as_str) != Some("map") {
+            return Err("map block has an unsupported schema".into());
+        }
+        let Value::List(items) = value.get("cells").ok_or("map block has no cells")? else {
+            return Err("map cells must be a list".into());
+        };
+        let mut cells = Vec::with_capacity(items.len());
+        for item in items {
+            let position = item.get("position").ok_or("map cell has no position")?;
+            let x = position
+                .get("x")
+                .and_then(Value::as_i64)
+                .ok_or("map cell x must be an integer")?;
+            let y = position
+                .get("y")
+                .and_then(Value::as_i64)
+                .ok_or("map cell y must be an integer")?;
+            let code = item
+                .get("code")
+                .and_then(Value::as_str)
+                .ok_or("map cell code must be a string")?;
+            let Value::List(channels) = item.get("color").ok_or("map cell has no color")? else {
+                return Err("map cell color must be a list".into());
+            };
+            let [red, green, blue] = channels.as_slice() else {
+                return Err("map cell color must have three channels".into());
+            };
+            let channel = |value: &Value| {
+                value
+                    .as_i64()
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| "map color channel must be in 0..255".to_owned())
+            };
+            cells.push(Cell {
+                position: Position { x, y },
+                center: hex_center(x, y),
+                color: Color::from_rgba(channel(red)?, channel(green)?, channel(blue)?, 255),
+                code: code.to_owned(),
+            });
+        }
+        if cells.is_empty() {
+            return Err("map block has no cells".into());
         }
         let min = cells.iter().fold(vec2(f32::MAX, f32::MAX), |min, cell| {
             min.min(cell.center - vec2(HEX_RADIUS, HEX_RADIUS))
@@ -49,7 +76,13 @@ impl MapRenderer {
         let max = cells.iter().fold(vec2(f32::MIN, f32::MIN), |max, cell| {
             max.max(cell.center + vec2(HEX_RADIUS, HEX_RADIUS))
         });
-        Self { cells, min, max }
+        Ok(Self { cells, min, max })
+    }
+
+    pub fn tiles(&self) -> impl Iterator<Item = (Position, &str)> {
+        self.cells
+            .iter()
+            .map(|cell| (cell.position, cell.code.as_str()))
     }
 
     pub fn draw_base(&self, viewport: &MapViewport, tint: Color) {
@@ -224,70 +257,44 @@ impl MapRenderer {
             draw_hex(
                 offset + (cell.center - self.min) * scale,
                 scale,
-                terrain_info(&cell.code).1,
+                terrain_color(&cell.code),
             );
         }
     }
-
-    pub fn hex_at(&self, point: Vec2) -> Option<Position> {
-        self.cells
-            .iter()
-            .filter(|cell| point_in_hex(point - cell.center))
-            .min_by(|left, right| {
-                left.center
-                    .distance_squared(point)
-                    .total_cmp(&right.center.distance_squared(point))
-            })
-            .map(|cell| cell.position)
-    }
 }
 
-pub fn time_tint(time: &str) -> Color {
-    match time {
-        "dawn" => Color::from_rgba(230, 240, 255, 255),
-        "dusk" => Color::from_rgba(255, 235, 220, 255),
-        "first_watch" | "second_watch" => Color::new(
-            180.0 / 255.0 * 0.9,
-            210.0 / 255.0 * 0.9,
-            242.0 / 255.0 * 0.9,
-            1.0,
-        ),
-        _ => WHITE,
-    }
-}
-
-pub fn terrain_info(code: &str) -> (&'static str, Color) {
+fn terrain_color(code: &str) -> Color {
     let (base, overlay) = visual_codes(code);
-    let (name, rgb) = if overlay.starts_with('B') {
-        ("Мост", [166, 140, 101])
+    let rgb = if overlay.starts_with('B') {
+        [166, 140, 101]
     } else if overlay.starts_with('V') || code == "village" {
-        ("Деревня", [190, 156, 95])
+        [190, 156, 95]
     } else if overlay.starts_with('F') || code == "forest" {
-        ("Лес", [36, 86, 42])
+        [36, 86, 42]
     } else if base.starts_with('K') || code == "keep" {
-        ("Цитадель", [178, 154, 104])
+        [178, 154, 104]
     } else if base.starts_with('C') || code == "castle" {
-        ("Замок", [141, 129, 112])
+        [141, 129, 112]
     } else if base.starts_with("Wo") {
-        ("Глубокая вода", [28, 61, 108])
+        [28, 61, 108]
     } else if base.starts_with('S') {
-        ("Болото", [75, 102, 78])
+        [75, 102, 78]
     } else if base.starts_with('D') {
-        ("Песок", [202, 180, 123])
+        [202, 180, 123]
     } else if base.starts_with('A') {
-        ("Снег", [203, 221, 228])
+        [203, 221, 228]
     } else if base.starts_with('M') {
-        ("Горы", [125, 125, 126])
+        [125, 125, 126]
     } else if base.starts_with('R') {
-        ("Дорога", [156, 133, 103])
+        [156, 133, 103]
     } else {
         match gameplay_type(code) {
-            "water" => ("Мелководье", [53, 107, 147]),
-            "hills" => ("Холмы", [139, 117, 77]),
-            _ => ("Равнина", [111, 145, 77]),
+            "water" => [53, 107, 147],
+            "hills" => [139, 117, 77],
+            _ => [111, 145, 77],
         }
     };
-    (name, Color::from_rgba(rgb[0], rgb[1], rgb[2], 255))
+    Color::from_rgba(rgb[0], rgb[1], rgb[2], 255)
 }
 
 pub fn hex_center(x: i64, y: i64) -> Vec2 {
@@ -307,7 +314,7 @@ fn vertices(center: Vec2, radius: f32) -> [Vec2; 6] {
     ]
 }
 
-fn point_in_hex(point: Vec2) -> bool {
+pub(crate) fn point_in_hex(point: Vec2) -> bool {
     let point = point.abs();
     point.y <= HEX_RADIUS && point.x <= HEX_RADIUS - point.y * 0.5
 }
@@ -336,18 +343,28 @@ fn draw_hex_lines(center: Vec2, radius: f32, thickness: f32, color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use wesnoth_engine::game::Game;
 
     #[test]
-    fn daylight_is_neutral_and_night_is_darker_than_twilight() {
-        assert_eq!(time_tint("morning"), WHITE);
-        assert_eq!(time_tint("afternoon"), WHITE);
-        assert!(time_tint("dawn").b > time_tint("dawn").r);
-        assert!(time_tint("dusk").r > time_tint("dusk").b);
-        for night in ["first_watch", "second_watch"] {
-            let tint = time_tint(night);
-            assert!(tint.r < time_tint("dawn").r && tint.g < time_tint("dusk").g);
-            assert_eq!(tint.a, 1.0);
-        }
+    fn presented_map_builds_the_client_cache() {
+        let mut game = Game::load(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"),
+            "scenarios/first_battle.wml",
+        )
+        .unwrap();
+        let snapshot = game.view_snapshot("map-test").unwrap();
+        let block = snapshot
+            .blocks
+            .iter()
+            .find(|block| block.id == "map")
+            .unwrap();
+        let map = MapRenderer::from_view(&block.content).unwrap();
+        assert!(
+            map.tiles()
+                .any(|(position, code)| position == Position { x: 1, y: 1 } && code == "grassland")
+        );
+        assert_eq!(map.tiles().count(), 8 * 6);
     }
 
     #[test]

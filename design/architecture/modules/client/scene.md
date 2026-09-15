@@ -1,7 +1,7 @@
 # client/scene
 
-Статус: частично реализован: terrain ground/world потребляет готовые SceneItem;
-юниты, деревни, hit regions и minimap ещё переносятся.
+Статус: частично реализован: terrain ground/world, их hit regions, карта,
+деревни и minimap потребляют View; юниты ещё переносятся.
 
 Файл реализации: `src/bin/client/scene.rs`.
 

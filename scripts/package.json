@@ -4,6 +4,7 @@
   "entry": "game.init",
   "resource_roots": [
     "adventures",
+    "assets",
     "dialogs",
     "game",
     "map_objects",
@@ -14,8 +15,17 @@
     "units"
   ],
   "protocol_version": 1,
-  "assets": {},
+  "assets": {
+    "ui/time/dawn": { "path": "assets/wesnoth/ui/time-of-day/schedule-dawn.png", "media_type": "image/png" },
+    "ui/time/morning": { "path": "assets/wesnoth/ui/time-of-day/schedule-morning.png", "media_type": "image/png" },
+    "ui/time/afternoon": { "path": "assets/wesnoth/ui/time-of-day/schedule-afternoon.png", "media_type": "image/png" },
+    "ui/time/dusk": { "path": "assets/wesnoth/ui/time-of-day/schedule-dusk.png", "media_type": "image/png" },
+    "ui/time/first-watch": { "path": "assets/wesnoth/ui/time-of-day/schedule-firstwatch.png", "media_type": "image/png" },
+    "ui/time/second-watch": { "path": "assets/wesnoth/ui/time-of-day/schedule-secondwatch.png", "media_type": "image/png" }
+  },
   "modules": [
+    "game.bootstrap",
+    "game.campaign",
     "game.init",
     "game.rules.combat",
     "game.presentation.effects",

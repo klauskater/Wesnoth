@@ -3,8 +3,8 @@
 Статус: **частично реализован**. Редакция проекта: 1. Общие сообщения, включая
 самостоятельный Error, строгий версионированный encode/decode и атомарная
 валидация верхнеуровневых блоков готовы. Asset references проверяются против
-immutable registry пакета до публикации Snapshot/Update. Базовое дерево UiNode,
-уникальность вложенных id, kind/enabled/text/action и его клиентский путь готовы.
+immutable registry пакета до публикации Snapshot/Update. Дерево UiNode,
+уникальность вложенных id, kind/enabled/text/asset/grow/action и его клиентский путь готовы.
 SceneItem редакции 1 валидирует ids, anchor/offset, layer/order, frames/timing,
 tint, hit id, crop/masks/opacity и asset registry. Layout/style UI и оставшиеся
 потребители сцены выполняются в следующих срезах.

@@ -1,4 +1,6 @@
 -- Package entry. Contract: contracts/target/modules/lua/entry.md
+local bootstrap = require("game.bootstrap")
+local campaign = require("game.campaign")
 local rules = require("rules.basic_combat")
 local terrain = require("game.rules.terrain")
 local combat = require("game.rules.combat")
@@ -13,7 +15,8 @@ local function prepare(context)
 end
 
 function entry.initialize(context, request)
-    return rules.initialize(prepare(context), request)
+    prepare(context)
+    return rules.initialize(context, bootstrap.create_scenario(context, request))
 end
 
 function entry.dispatch(context, command)
@@ -43,7 +46,8 @@ function entry.interact(context, request)
     local result = interaction.interpret(context, request)
     local query = result.view_context.query
     if query then
-        local operation = assert(rules[query.action], "unknown query: " .. tostring(query.action))
+        local operation = assert(campaign[query.action] or rules[query.action],
+            "unknown query: " .. tostring(query.action))
         result.view_context.query_result = {
             interaction_id = query.id,
             value = operation(context, query.payload),
@@ -59,6 +63,7 @@ end
 
 function entry.validate_restored(context)
     prepare(context)
+    bootstrap.validate_restored(context)
     rules.status(context)
     rules.snapshot(context)
     return true

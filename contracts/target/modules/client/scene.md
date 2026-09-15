@@ -1,9 +1,11 @@
 # Контракт client/scene
 
-Статус: **частично реализован**. Редакция проекта: 1. SceneItem ground/world
-приходит из View, сортируется по явным order/id, валидируется и готовится вместе
-с frames/tint/crop/masks/opacity; неизменный draw не обращается к Lua/session.
-Юниты, деревни, hit regions и minimap ещё используют прежние потребители.
+Статус: **частично реализован**. Редакция проекта: 1. SceneItem ground/world,
+карта и registry ассетов приходят из View. Сцена сортируется по явным order/id,
+валидируется и готовится вместе с frames/tint/crop/masks/opacity; terrain hit
+regions строятся из тех же anchor, что и draw. Деревни и minimap используют
+представленную карту, неизменный кадр не обращается к Lua/session. Юниты ещё
+используют прежний потребитель.
 Поставщик: `src/bin/client/scene.rs`.
 [Карточка модуля](../../../../design/architecture/modules/client/scene.md).
 Обязательны [общие соглашения](../../common.md) и [поток сообщений](../../stream.md).
@@ -32,6 +34,16 @@ draw(RenderScene, camera, elapsed) -> HitRegions
 описанную в [таблице соответствия](../../README.md#прежние-документы).
 Конкретный wire layout и имена полей этих игровых записей уточняются в данном
 контракте до переключения вызывающих, а не скрыто внутри реализации.
+
+Неизменяемые вспомогательные блоки редакции 1:
+
+```text
+map    = { schema: "map", cells: [{ position: {x,y}, code, color: [r,g,b] }] }
+assets = { schema: "assets", items: [{ id, path, media_type? }] }
+```
+
+Каналы `color` — целые числа 0..255; дубли asset id и неверная форма блоков
+отклоняются до установки GPU-ресурсов.
 
 ## Гарантии и результат
 

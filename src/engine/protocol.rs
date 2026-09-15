@@ -120,6 +120,8 @@ pub struct UiNode {
     pub id: String,
     pub kind: UiKind,
     pub text: Option<String>,
+    pub asset: Option<String>,
+    pub grow: f64,
     pub enabled: bool,
     pub action: Option<Action>,
     pub children: Vec<UiNode>,
@@ -150,6 +152,18 @@ pub fn ui_block(value: &Value) -> Result<UiNode, Error> {
     };
     if block.get("schema").and_then(Value::as_str) != Some("ui") {
         return Err(invalid("UI block must declare the ui schema"));
+    }
+    if block.contains_key("map_tint") {
+        let tint = number_array::<4>(block.get("map_tint"), [1.0; 4], "UI block map_tint")?;
+        if tint.iter().any(|channel| !(0.0..=1.0).contains(channel)) {
+            return Err(invalid("UI block map_tint entries must be in 0..1"));
+        }
+    }
+    if block
+        .get("scene_dark")
+        .is_some_and(|value| !matches!(value, Value::Bool(_)))
+    {
+        return Err(invalid("UI block scene_dark must be a boolean"));
     }
     let root = block
         .get("root")
@@ -434,6 +448,24 @@ fn parse_ui_node(candidate: &Value, ids: &mut BTreeSet<String>) -> Result<UiNode
         Some(Value::String(text)) => Some(text.clone()),
         Some(_) => return Err(invalid("UI node text must be a string")),
     };
+    let asset = match fields.get("asset") {
+        None => None,
+        Some(Value::String(asset)) if !asset.is_empty() => Some(asset.clone()),
+        Some(Value::String(_)) => return Err(invalid("UI node asset must not be empty")),
+        Some(_) => return Err(invalid("UI node asset must be a string")),
+    };
+    if kind == UiKind::Image && asset.is_none() {
+        return Err(invalid("image UI node has no asset"));
+    }
+    let grow = match fields.get("grow") {
+        None => 1.0,
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| invalid("UI node grow must be a number"))?,
+    };
+    if !grow.is_finite() || grow <= 0.0 {
+        return Err(invalid("UI node grow must be finite and positive"));
+    }
     let enabled = match fields.get("enabled") {
         None => true,
         Some(Value::Bool(enabled)) => *enabled,
@@ -462,6 +494,8 @@ fn parse_ui_node(candidate: &Value, ids: &mut BTreeSet<String>) -> Result<UiNode
         id: node_id.to_owned(),
         kind,
         text,
+        asset,
+        grow,
         enabled,
         action,
         children,
@@ -732,19 +766,27 @@ mod tests {
             ("kind".into(), Value::String("column".into())),
             (
                 "children".into(),
-                Value::List(vec![Value::Map(BTreeMap::from([
-                    ("id".into(), Value::String("end_turn".into())),
-                    ("kind".into(), Value::String("button".into())),
-                    ("text".into(), Value::String("End turn".into())),
-                    ("enabled".into(), Value::Bool(true)),
-                    (
-                        "action".into(),
-                        Value::Map(BTreeMap::from([
-                            ("action".into(), Value::String("end_turn".into())),
-                            ("payload".into(), Value::Null),
-                        ])),
-                    ),
-                ]))]),
+                Value::List(vec![
+                    Value::Map(BTreeMap::from([
+                        ("id".into(), Value::String("end_turn".into())),
+                        ("kind".into(), Value::String("button".into())),
+                        ("text".into(), Value::String("End turn".into())),
+                        ("enabled".into(), Value::Bool(true)),
+                        (
+                            "action".into(),
+                            Value::Map(BTreeMap::from([
+                                ("action".into(), Value::String("end_turn".into())),
+                                ("payload".into(), Value::Null),
+                            ])),
+                        ),
+                    ])),
+                    Value::Map(BTreeMap::from([
+                        ("id".into(), Value::String("banner".into())),
+                        ("kind".into(), Value::String("image".into())),
+                        ("asset".into(), Value::String("ui.banner".into())),
+                        ("grow".into(), Value::Integer(3)),
+                    ])),
+                ]),
             ),
         ]));
         let ui = Value::Map(BTreeMap::from([
@@ -752,6 +794,9 @@ mod tests {
             ("root".into(), root),
         ]));
         assert_eq!(ui_block(&ui).unwrap().children[0].kind, UiKind::Button);
+        let image = &ui_block(&ui).unwrap().children[1];
+        assert_eq!(image.asset.as_deref(), Some("ui.banner"));
+        assert_eq!(image.grow, 3.0);
 
         let scene_item = Value::Map(BTreeMap::from([
             ("id".into(), Value::String("tile:1".into())),

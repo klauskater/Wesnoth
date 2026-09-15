@@ -2,7 +2,10 @@
 //!
 //! Contract: `contracts/target/modules/client/scene.md`.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use macroquad::prelude::*;
 #[cfg(test)]
@@ -10,9 +13,13 @@ use wesnoth_engine::terrain_scene::TerrainScene;
 use wesnoth_engine::{
     engine::protocol::SceneItem,
     terrain_scene::{ImageModifiers, PlacedSprite, SpriteFrames, TerrainPass},
+    value::Value,
 };
 
-use crate::{map_renderer::hex_center, map_viewport::MapViewport};
+use crate::{
+    map_renderer::{hex_center, point_in_hex},
+    map_viewport::MapViewport,
+};
 
 const REFERENCE_RADIUS: f32 = 36.0;
 
@@ -20,6 +27,7 @@ pub struct SpriteRenderer {
     textures: Vec<Texture2D>,
     ground: Vec<DrawCommand>,
     world: Vec<DrawCommand>,
+    hit_regions: Vec<(String, wesnoth_engine::engine::Position)>,
 }
 
 struct DrawCommand {
@@ -44,11 +52,7 @@ struct Frame {
 }
 
 impl SpriteRenderer {
-    pub async fn load(
-        items: &[SceneItem],
-        assets: &BTreeMap<String, String>,
-        root: &Path,
-    ) -> Result<Self, String> {
+    pub async fn load(items: &[SceneItem], registry: &Value, root: &Path) -> Result<Self, String> {
         if let Some(item) = items
             .iter()
             .find(|item| item.layer != "ground" && item.layer != "world")
@@ -58,9 +62,17 @@ impl SpriteRenderer {
                 item.id, item.layer
             ));
         }
+        let assets = asset_registry(registry)?;
         let mut textures = Vec::new();
         let mut images = BTreeMap::new();
-        for (id, relative) in assets {
+        let wanted: BTreeSet<_> = items
+            .iter()
+            .flat_map(|item| item.frames.iter().chain(&item.masks))
+            .collect();
+        for id in wanted {
+            let relative = assets
+                .get(id)
+                .ok_or_else(|| format!("scene references unknown asset: {id}"))?;
             let path = root.join(relative);
             let path = path
                 .to_str()
@@ -93,10 +105,17 @@ impl SpriteRenderer {
             .iter_mut()
             .zip(world_tints)
             .for_each(|(command, tint)| command.tint = tint);
+        let hit_regions = items
+            .iter()
+            .filter_map(|item| item.hit_id.as_ref().map(|id| (id.clone(), item.anchor)))
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
+            .collect();
         Ok(Self {
             textures,
             ground,
             world,
+            hit_regions,
         })
     }
 
@@ -110,6 +129,10 @@ impl SpriteRenderer {
         for command in &self.world {
             self.draw(command, viewport, elapsed_ms, tint);
         }
+    }
+
+    pub fn hit_at(&self, point: Vec2) -> Option<(&str, wesnoth_engine::engine::Position)> {
+        hit_region_at(&self.hit_regions, point).map(|(id, position)| (id.as_str(), *position))
     }
 
     fn draw(&self, command: &DrawCommand, viewport: &MapViewport, elapsed_ms: u64, tint: Color) {
@@ -186,6 +209,44 @@ impl SpriteRenderer {
             });
         }
     }
+}
+
+fn asset_registry(value: &Value) -> Result<BTreeMap<String, String>, String> {
+    if value.get("schema").and_then(Value::as_str) != Some("assets") {
+        return Err("asset block has an unsupported schema".into());
+    }
+    let Value::List(items) = value.get("items").ok_or("asset block has no items")? else {
+        return Err("asset items must be a list".into());
+    };
+    let mut assets = BTreeMap::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("asset id must be a string")?;
+        let path = item
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("asset path must be a string")?;
+        if assets.insert(id.to_owned(), path.to_owned()).is_some() {
+            return Err(format!("duplicate asset id: {id}"));
+        }
+    }
+    Ok(assets)
+}
+
+fn hit_region_at(
+    regions: &[(String, wesnoth_engine::engine::Position)],
+    point: Vec2,
+) -> Option<&(String, wesnoth_engine::engine::Position)> {
+    regions
+        .iter()
+        .filter(|(_, position)| point_in_hex(point - hex_center(position.x, position.y)))
+        .min_by(|(_, left), (_, right)| {
+            hex_center(left.x, left.y)
+                .distance_squared(point)
+                .total_cmp(&hex_center(right.x, right.y).distance_squared(point))
+        })
 }
 
 fn scene_items(
@@ -390,6 +451,43 @@ fn modify_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_registry_is_read_from_the_view() {
+        let registry = Value::Map(BTreeMap::from([
+            ("schema".into(), Value::String("assets".into())),
+            (
+                "items".into(),
+                Value::List(vec![Value::Map(BTreeMap::from([
+                    ("id".into(), Value::String("terrain/grass".into())),
+                    ("path".into(), Value::String("assets/grass.png".into())),
+                ]))]),
+            ),
+        ]));
+        assert_eq!(
+            asset_registry(&registry).unwrap()["terrain/grass"],
+            "assets/grass.png"
+        );
+    }
+
+    #[test]
+    fn hit_regions_follow_the_same_hex_geometry_as_rendering() {
+        let regions = vec![
+            (
+                "cell:1:1".into(),
+                wesnoth_engine::engine::Position { x: 1, y: 1 },
+            ),
+            (
+                "cell:2:1".into(),
+                wesnoth_engine::engine::Position { x: 2, y: 1 },
+            ),
+        ];
+        assert_eq!(
+            hit_region_at(&regions, hex_center(2, 1)).map(|region| region.0.as_str()),
+            Some("cell:2:1")
+        );
+        assert!(hit_region_at(&regions, vec2(100.0, 100.0)).is_none());
+    }
 
     #[test]
     fn image_operations_follow_wml_crop_mask_and_opacity_order() {

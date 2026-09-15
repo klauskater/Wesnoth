@@ -1,7 +1,9 @@
 # lua/presenter
 
-Статус: частично реализован: presenter собирает status/objects/HUD/static scene и
-effects; динамическая сцена и полная viewer-фильтрация ещё переносятся.
+Статус: частично реализован: presenter собирает status/objects/HUD/time, статическую
+scene, map/assets, диалоги, эффекты, выбор с готовыми строками местности/юнита,
+навигацию доступных юнитов, маршрут с защитой, attack, summary, unit и recruit-блоки;
+динамическая сцена и полная viewer-фильтрация ещё переносятся.
 
 Файл реализации: `scripts/game/presentation/presenter.lua`.
 

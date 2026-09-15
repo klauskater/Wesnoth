@@ -2,7 +2,7 @@
 
 Статус: **частично реализован**. Редакция проекта: 1. Атомарные snapshot/update,
 проверка base_view_revision, восстановление snapshot и вложенный lookup реализованы;
-GameScreen получает status/objects и effects из кеша. Остальные UI/scene/input
+GameScreen получает status/objects/time и effects из кеша. Остальные UI/scene/input
 потребители ещё переводятся на универсальные узлы представления.
 Поставщик: `src/bin/client/view.rs`.
 [Карточка модуля](../../../../design/architecture/modules/client/view.md).

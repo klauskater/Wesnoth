@@ -2,25 +2,78 @@
 //!
 //! Contract: `contracts/target/modules/client/ui.md`.
 
+use std::{collections::BTreeMap, path::Path};
+
 use macroquad::prelude::*;
 use wesnoth_engine::engine::protocol::{Action, UiKind, UiNode};
+use wesnoth_engine::value::Value;
 
 use crate::widgets::{Input, Ui};
 
 const GAP: f32 = 8.0;
 
+pub struct Assets {
+    textures: BTreeMap<String, Texture2D>,
+}
+
+impl Assets {
+    pub async fn load(registry: &Value, root: &Path) -> Result<Self, String> {
+        if registry.get("schema").and_then(Value::as_str) != Some("assets") {
+            return Err("asset block has an unsupported schema".into());
+        }
+        let Value::List(items) = registry.get("items").ok_or("asset block has no items")? else {
+            return Err("asset items must be a list".into());
+        };
+        let mut textures = BTreeMap::new();
+        for item in items {
+            let Some(media_type) = item.get("media_type").and_then(Value::as_str) else {
+                continue;
+            };
+            if !media_type.starts_with("image/") {
+                continue;
+            }
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("asset id must be a string")?;
+            let relative = item
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or("asset path must be a string")?;
+            let path = root.join(relative);
+            let path = path
+                .to_str()
+                .ok_or_else(|| format!("UI asset path is not UTF-8: {}", path.display()))?;
+            let texture = load_texture(path)
+                .await
+                .map_err(|error| format!("cannot load UI asset {id} from {path}: {error}"))?;
+            if textures.insert(id.to_owned(), texture).is_some() {
+                return Err(format!("duplicate UI asset id: {id}"));
+            }
+        }
+        Ok(Self { textures })
+    }
+
+    fn get(&self, id: &str) -> Result<&Texture2D, String> {
+        self.textures
+            .get(id)
+            .ok_or_else(|| format!("UI references unavailable image asset: {id}"))
+    }
+}
+
 pub fn draw(
     ui: &Ui,
     input: &Input,
     font: &Font,
+    assets: &Assets,
     node: &UiNode,
     rect: Rect,
     locally_enabled: bool,
 ) -> Result<Option<Action>, String> {
     match node.kind {
-        UiKind::Row => draw_children(ui, input, font, node, rect, locally_enabled, true),
+        UiKind::Row => draw_children(ui, input, font, assets, node, rect, locally_enabled, true),
         UiKind::Column | UiKind::List => {
-            draw_children(ui, input, font, node, rect, locally_enabled, false)
+            draw_children(ui, input, font, assets, node, rect, locally_enabled, false)
         }
         UiKind::Panel => {
             ui.panel(rect);
@@ -28,6 +81,7 @@ pub fn draw(
                 ui,
                 input,
                 font,
+                assets,
                 node,
                 inset(rect, GAP),
                 locally_enabled,
@@ -57,7 +111,37 @@ pub fn draw(
         ))
         .then(|| node.action.clone())
         .flatten()),
-        UiKind::Image | UiKind::Progress => Err(format!(
+        UiKind::Image => {
+            let texture = assets.get(node.asset.as_deref().unwrap_or(""))?;
+            let scale = (rect.w / texture.width()).min(rect.h / texture.height());
+            let image = Rect::new(
+                rect.x + (rect.w - texture.width() * scale) / 2.0,
+                rect.y + (rect.h - texture.height() * scale) / 2.0,
+                texture.width() * scale,
+                texture.height() * scale,
+            );
+            ui.image(texture, image);
+            if rect.contains(input.position)
+                && let Some(tooltip) = node
+                    .children
+                    .iter()
+                    .find(|child| child.kind == UiKind::Tooltip)
+            {
+                let tooltip_rect = Rect::new(rect.x, rect.y + rect.h - 52.0, rect.w, 52.0);
+                ui.shade(tooltip_rect, Color::from_rgba(18, 24, 29, 235));
+                draw(
+                    ui,
+                    input,
+                    font,
+                    assets,
+                    tooltip,
+                    inset(tooltip_rect, 6.0),
+                    locally_enabled,
+                )?;
+            }
+            Ok(None)
+        }
+        UiKind::Progress => Err(format!(
             "UI node {} uses an unsupported renderer kind: {:?}",
             node.id, node.kind
         )),
@@ -68,6 +152,7 @@ fn draw_children(
     ui: &Ui,
     input: &Input,
     font: &Font,
+    assets: &Assets,
     node: &UiNode,
     rect: Rect,
     locally_enabled: bool,
@@ -77,13 +162,15 @@ fn draw_children(
         return Ok(None);
     }
     let count = node.children.len() as f32;
+    let total_grow: f32 = node.children.iter().map(|child| child.grow as f32).sum();
     let extent = if horizontal { rect.w } else { rect.h };
-    let item_extent = (extent - GAP * (count - 1.0)) / count;
-    if !item_extent.is_finite() || item_extent <= 0.0 {
+    let available = extent - GAP * (count - 1.0);
+    if !available.is_finite() || available <= 0.0 {
         return Err(format!("UI node {} has no layout space", node.id));
     }
-    for (index, child) in node.children.iter().enumerate() {
-        let offset = index as f32 * (item_extent + GAP);
+    let mut offset = 0.0;
+    for child in &node.children {
+        let item_extent = available * child.grow as f32 / total_grow;
         let child_rect = if horizontal {
             Rect::new(rect.x + offset, rect.y, item_extent, rect.h)
         } else {
@@ -93,12 +180,14 @@ fn draw_children(
             ui,
             input,
             font,
+            assets,
             child,
             child_rect,
             locally_enabled && node.enabled,
         )? {
             return Ok(Some(action));
         }
+        offset += item_extent + GAP;
     }
     Ok(None)
 }

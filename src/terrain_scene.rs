@@ -257,6 +257,10 @@ fn scene_item(sprite: &PlacedSprite, layer: &str, order: usize) -> Value {
         ("layer".into(), Value::String(layer.into())),
         ("order".into(), Value::Integer(order as i64)),
         (
+            "hit_id".into(),
+            Value::String(format!("cell:{}:{}", sprite.anchor.x, sprite.anchor.y)),
+        ),
+        (
             "clips".into(),
             Value::List(
                 sprite

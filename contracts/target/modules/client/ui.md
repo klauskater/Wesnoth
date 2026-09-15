@@ -1,9 +1,10 @@
 # Контракт client/ui
 
 Статус: **частично реализован**. Редакция проекта: 1. Общий renderer принимает
-UiNode из View, локально раскладывает Row/Column/List/Panel/Text/Button/Tooltip и
-возвращает непрозрачный action; HUD завершения хода переведён. Image/Progress,
-layout/style поля и остальные игровые панели ещё переносятся.
+UiNode из View, локально раскладывает Row/Column/List/Panel/Text/Image/Button/Tooltip,
+учитывает grow, загружает package assets и возвращает непрозрачный action. HUD
+завершения хода, время суток, summary, панель юнита, найм и диалоги переведены. Progress,
+расширенные layout/style поля и остальные игровые панели ещё переносятся.
 Поставщик: `src/bin/client/ui.rs`.
 [Карточка модуля](../../../../design/architecture/modules/client/ui.md).
 Обязательны [общие соглашения](../../common.md) и [поток сообщений](../../stream.md).

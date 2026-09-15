@@ -1,7 +1,7 @@
 # client/view
 
 Статус: частично реализован: атомарный кеш и восстановление snapshot готовы,
-status/objects GameScreen читаются из него; универсальные UI/scene узлы ещё впереди.
+status/objects/time GameScreen читаются из него; остальные UI/scene узлы ещё впереди.
 
 Файл реализации: `src/bin/client/view.rs`.
 

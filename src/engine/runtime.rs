@@ -393,6 +393,20 @@ fn create_context(
             },
         )?,
     )?;
+    let state = Rc::clone(&transaction);
+    let invocation = Rc::clone(&active);
+    state_api.set(
+        "all",
+        lua.create_function(move |lua, _self: Table| {
+            ensure_active(&invocation)?;
+            let state = state.borrow();
+            let values = lua.create_table()?;
+            for (key, value) in state.states() {
+                values.set(key, value.to_lua(lua)?)?;
+            }
+            Ok(values)
+        })?,
+    )?;
     if writable {
         let state = Rc::clone(&transaction);
         let invocation = Rc::clone(&active);

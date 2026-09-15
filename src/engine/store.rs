@@ -248,6 +248,13 @@ impl Transaction {
         self.world.state.get(id)
     }
 
+    pub(crate) fn states(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.world
+            .state
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+    }
+
     fn apply_one(&mut self, operation: &Operation) -> Result<(), String> {
         match operation {
             Operation::Insert { address, value } => {

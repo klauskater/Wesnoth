@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 
-use crate::{map_renderer::hex_center, map_viewport::MapViewport};
+use crate::{
+    map_renderer::{MapRenderer, hex_center},
+    map_viewport::MapViewport,
+};
 use macroquad::prelude::*;
 use wesnoth_engine::{
-    engine::{Map, Position},
+    engine::Position,
     terrain::{gameplay_type, visual_codes},
     value::Value,
 };
@@ -18,43 +21,39 @@ pub struct VillageRenderer {
 }
 
 impl VillageRenderer {
-    pub fn load(map: &Map, status: &Value) -> Result<Self, String> {
+    pub fn load(map: &MapRenderer, status: &Value) -> Result<Self, String> {
         let mut textures = BTreeMap::new();
         let mut buildings = Vec::new();
-        for y in 1..=map.height as i64 {
-            for x in 1..=map.width as i64 {
-                let position = Position { x, y };
-                let code = map.raw(position)?;
-                if gameplay_type(code) != "village" {
-                    continue;
-                }
-                let stem = village_stem(code);
-                let choices = variants(stem);
-                if choices.is_empty() {
-                    return Err(format!("missing village art: {stem}"));
-                }
-                let id = choices[((x * 17 + y * 31) as usize) % choices.len()];
-                let night_id = format!("{id}-night");
-                let night_id = if asset(&night_id).is_some() {
-                    night_id.as_str()
-                } else {
-                    id
-                };
-                let mut texture = |key: &str| -> Texture2D {
-                    textures
-                        .entry(key.to_owned())
-                        .or_insert_with(|| {
-                            let image = Texture2D::from_file_with_format(
-                                asset(key).unwrap(),
-                                Some(ImageFormat::Png),
-                            );
-                            image.set_filter(FilterMode::Nearest);
-                            image
-                        })
-                        .clone()
-                };
-                buildings.push((position, texture(id), texture(night_id)));
+        for (position, code) in map.tiles() {
+            if gameplay_type(code) != "village" {
+                continue;
             }
+            let stem = village_stem(code);
+            let choices = variants(stem);
+            if choices.is_empty() {
+                return Err(format!("missing village art: {stem}"));
+            }
+            let id = choices[((position.x * 17 + position.y * 31) as usize) % choices.len()];
+            let night_id = format!("{id}-night");
+            let night_id = if asset(&night_id).is_some() {
+                night_id.as_str()
+            } else {
+                id
+            };
+            let mut texture = |key: &str| -> Texture2D {
+                textures
+                    .entry(key.to_owned())
+                    .or_insert_with(|| {
+                        let image = Texture2D::from_file_with_format(
+                            asset(key).unwrap(),
+                            Some(ImageFormat::Png),
+                        );
+                        image.set_filter(FilterMode::Nearest);
+                        image
+                    })
+                    .clone()
+            };
+            buildings.push((position, texture(id), texture(night_id)));
         }
         buildings.sort_by_key(|(p, _, _)| (p.y * 2 - i64::from(p.x % 2 == 0), p.x));
         let mut flags = BTreeMap::new();
@@ -81,10 +80,16 @@ impl VillageRenderer {
         Ok(Self { buildings, flags })
     }
 
-    pub fn draw(&self, viewport: &MapViewport, status: &Value, elapsed_ms: u64, tint: Color) {
+    pub fn draw(
+        &self,
+        viewport: &MapViewport,
+        status: &Value,
+        elapsed_ms: u64,
+        tint: Color,
+        night: bool,
+    ) {
         let screen = vec2(screen_width(), screen_height());
         let scale = viewport.zoom() / 36.0;
-        let night = night_windows(string(status, "time_of_day"));
         for (position, day, dark) in &self.buildings {
             let center = viewport.project(hex_center(position.x, position.y), screen);
             let texture = if night { dark } else { day };
@@ -149,9 +154,6 @@ fn village_stem(code: &str) -> &str {
         "Vl" => "log-cabin",
         _ => "human",
     }
-}
-fn night_windows(time: &str) -> bool {
-    matches!(time, "dusk" | "first_watch" | "second_watch")
 }
 fn flag_frame(elapsed_ms: u64, position: Position, count: usize) -> usize {
     ((elapsed_ms / 150 + (position.x * 7 + position.y * 13) as u64) % count as u64) as usize
@@ -324,7 +326,5 @@ mod tests {
                 flag_frame(count as u64 * 150, p, count)
             );
         }
-        assert!(night_windows("dusk") && night_windows("second_watch"));
-        assert!(!night_windows("dawn") && !night_windows("morning"));
     }
 }

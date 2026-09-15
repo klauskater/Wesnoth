@@ -68,17 +68,27 @@ pub struct Session {
     interactions: BTreeMap<String, CachedInteraction>,
 }
 
+pub(crate) struct SessionInput {
+    pub id: String,
+    pub package: PackageIdentity,
+    pub assets: BTreeSet<String>,
+    pub world: World,
+    pub seed: u64,
+    pub modules: BTreeMap<String, String>,
+    pub entry: String,
+}
+
 impl Session {
-    fn load_entry(
-        id: impl Into<String>,
-        package: PackageIdentity,
-        assets: BTreeSet<String>,
-        world: World,
-        seed: u64,
-        modules: BTreeMap<String, String>,
-        entry: &str,
-    ) -> Result<Self, String> {
-        let id = id.into();
+    fn load_entry(input: SessionInput) -> Result<Self, String> {
+        let SessionInput {
+            id,
+            package,
+            assets,
+            world,
+            seed,
+            modules,
+            entry,
+        } = input;
         if id.is_empty() {
             return Err("session id must not be empty".into());
         }
@@ -89,7 +99,7 @@ impl Session {
                 protocol::PROTOCOL_VERSION
             ));
         }
-        let (runtime, store) = Runtime::load_entry(world, seed, modules, entry)?;
+        let (runtime, store) = Runtime::load_entry(world, seed, modules, &entry)?;
         Ok(Self {
             root_id: id.clone(),
             id,
@@ -104,32 +114,14 @@ impl Session {
         })
     }
 
-    pub(crate) fn open(
-        id: impl Into<String>,
-        package: PackageIdentity,
-        assets: BTreeSet<String>,
-        world: World,
-        seed: u64,
-        modules: BTreeMap<String, String>,
-        entry: &str,
-        request: Value,
-    ) -> Result<Self, String> {
-        let mut session = Self::load_entry(id, package, assets, world, seed, modules, entry)?;
+    pub(crate) fn open(input: SessionInput, request: Value) -> Result<Self, String> {
+        let mut session = Self::load_entry(input)?;
         session.initialize(request)?;
         Ok(session)
     }
 
-    pub(crate) fn restore_entry(
-        id: impl Into<String>,
-        package: PackageIdentity,
-        assets: BTreeSet<String>,
-        world: World,
-        seed: u64,
-        modules: BTreeMap<String, String>,
-        entry: &str,
-        bytes: &[u8],
-    ) -> Result<Self, String> {
-        let mut session = Self::load_entry(id, package, assets, world, seed, modules, entry)?;
+    pub(crate) fn restore_entry(input: SessionInput, bytes: &[u8]) -> Result<Self, String> {
+        let mut session = Self::load_entry(input)?;
         session.restore(bytes).map_err(|error| error.message)?;
         Ok(session)
     }
@@ -384,9 +376,12 @@ impl Session {
             ("target".into(), interaction.target.clone()),
             ("payload".into(), interaction.payload.clone()),
         ]));
+        let world_revision = i64::try_from(self.store.revision())
+            .map_err(|_| Error::new("conflict", "world revision exceeds Value integer range"))?;
         let request = Value::Map(BTreeMap::from([
             ("viewer".into(), Value::String(viewer.into())),
             ("view_context".into(), context),
+            ("world_revision".into(), Value::Integer(world_revision)),
             ("input".into(), input),
         ]));
         let transaction = self
@@ -587,6 +582,53 @@ fn take_string(value: &mut BTreeMap<String, Value>, field: &str) -> Result<Strin
     }
 }
 
+fn command_value(command: &Command) -> Value {
+    Value::Map(BTreeMap::from([
+        ("action".into(), Value::String(command.action.clone())),
+        ("payload".into(), command.payload.clone()),
+    ]))
+}
+
+fn rejected(command: &Command, revision: u64, code: &str, message: impl Into<String>) -> Dispatch {
+    rejected_with_error(command, revision, Error::new(code, message))
+}
+
+fn rejected_with_error(command: &Command, revision: u64, error: Error) -> Dispatch {
+    Dispatch {
+        result: CommandResult {
+            command_id: command.command_id.clone(),
+            status: CommandStatus::Rejected,
+            world_revision: revision,
+            error: Some(error),
+        },
+        events: None,
+        changes: None,
+        view: None,
+        presentation_error: None,
+    }
+}
+
+fn interaction_error(
+    interaction_id: &str,
+    code: &str,
+    message: impl Into<String>,
+) -> InteractionDelivery {
+    interaction_failure(interaction_id, Error::new(code, message))
+}
+
+fn interaction_failure(interaction_id: &str, error: Error) -> InteractionDelivery {
+    InteractionDelivery {
+        interaction_id: interaction_id.into(),
+        view: None,
+        command: None,
+        error: Some(error),
+    }
+}
+
+fn runtime_error(error: RuntimeError) -> Error {
+    Error::new(error.code(), error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,15 +649,15 @@ mod tests {
             runtime_error(RuntimeError::BudgetExceeded).code,
             "budget_exceeded"
         );
-        let mut session = Session::load_entry(
-            "test",
-            PackageIdentity {
+        let mut session = Session::load_entry(SessionInput {
+            id: "test".into(),
+            package: PackageIdentity {
                 package_id: "test".into(),
                 package_version: "1".into(),
                 protocol_version: 1,
             },
-            BTreeSet::new(),
-            World {
+            assets: BTreeSet::new(),
+            world: World {
                 map: Map {
                     width: 1,
                     height: 1,
@@ -624,8 +666,8 @@ mod tests {
                 objects: BTreeMap::new(),
                 state: BTreeMap::new(),
             },
-            1,
-            BTreeMap::from([(
+            seed: 1,
+            modules: BTreeMap::from([(
                 "game.init".into(),
                 "return {
                     dispatch=function(c) local n=(c.state:get('count') or 0)+1 c.state:set('count',n) return n end,
@@ -643,8 +685,8 @@ mod tests {
                     end
                 }".into(),
             )]),
-            "game.init",
-        )
+            entry: "game.init".into(),
+        })
         .unwrap();
         let request = command("c1", 0, Value::Null);
         let first = session.dispatch("viewer", request.clone());
@@ -732,51 +774,59 @@ mod tests {
         assert_eq!(session.id(), restored_id);
         assert_eq!(session.world().state["count"], Value::Integer(2));
     }
-}
 
-fn command_value(command: &Command) -> Value {
-    Value::Map(BTreeMap::from([
-        ("action".into(), Value::String(command.action.clone())),
-        ("payload".into(), command.payload.clone()),
-    ]))
-}
+    #[test]
+    fn presentation_failure_does_not_repeat_a_committed_command_and_snapshot_recovers() {
+        let mut session = Session::load_entry(SessionInput {
+            id: "presentation-failure".into(),
+            package: PackageIdentity {
+                package_id: "test".into(),
+                package_version: "1".into(),
+                protocol_version: 1,
+            },
+            assets: BTreeSet::new(),
+            world: World {
+                map: Map {
+                    width: 1,
+                    height: 1,
+                    cells: vec!["Gg".into()],
+                },
+                objects: BTreeMap::new(),
+                state: BTreeMap::new(),
+            },
+            seed: 1,
+            modules: BTreeMap::from([(
+                "game.init".into(),
+                "return {
+                    dispatch=function(c)
+                        c.state:set('count',(c.state:get('count') or 0)+1)
+                        return wesnoth.value.null
+                    end,
+                    present=function(c,r)
+                        if r.command_id == 'c1' then error('presentation failed') end
+                        return {
+                            replace_blocks={{id='count',content=c.state:get('count')}},
+                            remove_ids=wesnoth.value.list(), effects=wesnoth.value.list()
+                        }
+                    end,
+                    interact=function(_,r) return {view_context=r.view_context} end,
+                    validate_restored=function() return true end
+                }"
+                .into(),
+            )]),
+            entry: "game.init".into(),
+        })
+        .unwrap();
+        let request = command("c1", 0, Value::Null);
+        let failed = session.dispatch("viewer", request.clone());
+        assert_eq!(failed.result.status, CommandStatus::Committed);
+        assert_eq!(session.world().state["count"], Value::Integer(1));
+        assert!(failed.view.is_none() && failed.presentation_error.is_some());
+        assert_eq!(session.dispatch("viewer", request), failed);
+        assert_eq!(session.world().state["count"], Value::Integer(1));
 
-fn rejected(command: &Command, revision: u64, code: &str, message: impl Into<String>) -> Dispatch {
-    rejected_with_error(command, revision, Error::new(code, message))
-}
-
-fn rejected_with_error(command: &Command, revision: u64, error: Error) -> Dispatch {
-    Dispatch {
-        result: CommandResult {
-            command_id: command.command_id.clone(),
-            status: CommandStatus::Rejected,
-            world_revision: revision,
-            error: Some(error),
-        },
-        events: None,
-        changes: None,
-        view: None,
-        presentation_error: None,
+        let snapshot = session.snapshot("viewer").unwrap();
+        assert_eq!(snapshot.world_revision, 1);
+        assert_eq!(snapshot.blocks[0].content, Value::Integer(1));
     }
-}
-
-fn interaction_error(
-    interaction_id: &str,
-    code: &str,
-    message: impl Into<String>,
-) -> InteractionDelivery {
-    interaction_failure(interaction_id, Error::new(code, message))
-}
-
-fn interaction_failure(interaction_id: &str, error: Error) -> InteractionDelivery {
-    InteractionDelivery {
-        interaction_id: interaction_id.into(),
-        view: None,
-        command: None,
-        error: Some(error),
-    }
-}
-
-fn runtime_error(error: RuntimeError) -> Error {
-    Error::new(error.code(), error.to_string())
 }

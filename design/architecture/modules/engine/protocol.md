@@ -1,8 +1,8 @@
 # engine/protocol
 
 Статус: частично реализован; строгий wire envelope, общие сообщения/валидация,
-package-aware asset references, базовое дерево UiNode и SceneItem редакции 1
-с клиентскими потребителями готовы; UI layout/style и прочие scene-слои ещё
+package-aware asset references, UiNode с text/image/grow/action и SceneItem редакции 1
+с клиентскими потребителями готовы; расширенный UI layout/style и прочие scene-слои ещё
 переносятся.
 
 Файл реализации: `src/engine/protocol.rs`.
