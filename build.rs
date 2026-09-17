@@ -1,6 +1,13 @@
 use std::{env, fs, path::Path};
 
 fn main() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-arg-bin=wesnoth-client=/EXPORT:NvOptimusEnablement,DATA");
+        println!(
+            "cargo:rustc-link-arg-bin=wesnoth-client=/EXPORT:AmdPowerXpressRequestHighPerformance,DATA"
+        );
+    }
+
     println!("cargo:rerun-if-changed=scripts");
     println!("cargo:rerun-if-changed=assets/wesnoth/core-units");
     let manifest = env::var("CARGO_MANIFEST_DIR").unwrap();

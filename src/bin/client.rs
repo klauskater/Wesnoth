@@ -5,6 +5,19 @@ mod connection;
 use macroquad::prelude::*;
 use wesnoth_engine::{adventure::Adventure, game::Game};
 
+// Export the standard hybrid-graphics hints so Optimus/PowerXpress selects the
+// discrete GPU. Intel HD 3000 cannot create the OpenGL core profile miniquad
+// requires on Windows.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+#[used]
+pub static NvOptimusEnablement: u32 = 1;
+
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+#[used]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
+
 #[path = "client/ui.rs"]
 mod declarative_ui;
 #[path = "client/map_renderer.rs"]
