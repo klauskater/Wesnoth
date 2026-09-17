@@ -377,7 +377,7 @@ impl GameScreen {
             self.viewport.focus(hex_center(p.x, p.y));
         }
         if self.view.block("recruit").is_some()
-            && ui.button(&input, font, button(3.0), "Нанять", ready)
+            && ui.button(&input, font, button(3.0), "Войска", ready)
         {
             self.recruit_menu = true;
         }

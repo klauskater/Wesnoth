@@ -1,6 +1,13 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use wesnoth_engine::{engine::Position, game::Game, value::Value};
+use wesnoth_engine::{
+    engine::{
+        Position,
+        protocol::{CommandStatus, Interaction, InteractionKind},
+    },
+    game::Game,
+    value::Value,
+};
 
 fn game() -> Game {
     Game::load(
@@ -1286,17 +1293,60 @@ fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
     )
     .unwrap();
     second.acknowledge_dialog().unwrap();
-    let status = second.query("status", Value::Nil).unwrap();
-    let destination = value_list_for_test(&status, "recruit_hexes")[0].clone();
-    let recalled = second
-        .execute(
-            "recall",
-            Value::Map(BTreeMap::from([
-                ("unit".into(), Value::String("player_Spearman_1".into())),
-                ("destination".into(), destination),
-            ])),
-        )
+    let snapshot = second.view_snapshot("recall-test").unwrap();
+    let destination = snapshot
+        .blocks
+        .iter()
+        .find(|block| block.id == "status")
+        .and_then(|block| block.content.get("recruit_hexes"))
+        .and_then(|value| match value {
+            Value::List(values) => values.first(),
+            _ => None,
+        })
+        .cloned()
         .unwrap();
+    let selected = second.interact(
+        "recall-test",
+        Interaction {
+            interaction_id: "select-recall-hex".into(),
+            expected_view_revision: snapshot.view_revision,
+            kind: InteractionKind::CellClick,
+            target: destination,
+            payload: Value::Nil,
+        },
+    );
+    let update = selected.view.unwrap();
+    let action = update
+        .replace_blocks
+        .iter()
+        .find(|block| block.id == "recruit")
+        .and_then(|block| wesnoth_engine::engine::protocol::ui_block(&block.content).ok())
+        .and_then(|root| {
+            root.children
+                .into_iter()
+                .find(|node| node.id == "recall_player_Spearman_1")
+        })
+        .and_then(|node| node.action)
+        .unwrap();
+    let recalled = second.interact(
+        "recall-test",
+        Interaction {
+            interaction_id: "recall-veteran".into(),
+            expected_view_revision: update.view_revision,
+            kind: InteractionKind::Activate,
+            target: Value::String(action.action.clone()),
+            payload: Value::Map(BTreeMap::from([
+                ("action".into(), Value::String(action.action)),
+                ("payload".into(), action.payload),
+            ])),
+        },
+    );
+    let recalled = recalled.command.unwrap();
+    assert_eq!(recalled.result.status, CommandStatus::Committed);
+    let recalled = match recalled.events.unwrap() {
+        Value::List(events) => events,
+        event => vec![event],
+    };
     assert_eq!(
         recalled[0].get("type").and_then(Value::as_str),
         Some("unit_recalled")

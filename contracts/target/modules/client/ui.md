@@ -3,7 +3,7 @@
 Статус: **частично реализован**. Редакция проекта: 1. Общий renderer принимает
 UiNode из View, локально раскладывает Row/Column/List/Panel/Text/Image/Button/Tooltip,
 учитывает grow, загружает package assets и возвращает непрозрачный action. HUD
-завершения хода, время суток, summary, панель юнита, найм и диалоги переведены. Progress,
+завершения хода, время суток, summary, панель юнита, найм/recall и диалоги переведены. Progress,
 расширенные layout/style поля и остальные игровые панели ещё переносятся.
 Поставщик: `src/bin/client/ui.rs`.
 [Карточка модуля](../../../../design/architecture/modules/client/ui.md).

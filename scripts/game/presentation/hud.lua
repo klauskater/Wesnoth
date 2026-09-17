@@ -57,7 +57,8 @@ end
 
 function hud.recruit(status, selection)
     if not status.can_end_turn or status.pending_choice or status.pending_advancement
-        or not selection or not selection.position or #status.recruit_options == 0 then return nil end
+        or not selection or not selection.position
+        or #status.recruit_options + #status.recall_options == 0 then return nil end
     local destination
     for _, hex in ipairs(status.recruit_hexes) do
         if hex.x == selection.position.x and hex.y == selection.position.y then
@@ -69,7 +70,7 @@ function hud.recruit(status, selection)
     local children = {
         {
             id = "recruit_title", kind = "text", grow = 1,
-            text = string.format("Нанять · Золото: %d", status.gold),
+            text = string.format("Войска · Золото: %d", status.gold),
         },
     }
     for _, option in ipairs(status.recruit_options) do
@@ -80,6 +81,17 @@ function hud.recruit(status, selection)
             action = {
                 action = "recruit",
                 payload = { unit_type = option.id, destination = destination },
+            },
+        }
+    end
+    for _, option in ipairs(status.recall_options) do
+        children[#children + 1] = {
+            id = "recall_" .. option.id, kind = "button", grow = 2,
+            text = string.format("Призвать %s · %d зол.", option.name, option.cost),
+            enabled = option.cost <= status.gold,
+            action = {
+                action = "recall",
+                payload = { unit = option.id, destination = destination },
             },
         }
     end

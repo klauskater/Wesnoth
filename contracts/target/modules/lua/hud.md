@@ -3,7 +3,7 @@
 Статус: **частично реализован**. Редакция проекта: 1. HUD публикует типизированные
 деревья UiNode с вычисленными label/enabled/action для завершения хода, а также
 label/image/tooltip/map tint/scene variant времени суток, summary, панель юнита
-меню найма и постраничные диалоги с готовыми ценами/enabled/action; остальные панели и обязательные
+меню найма/recall и постраничные диалоги с готовыми ценами/enabled/action; остальные панели и обязательные
 выборы ещё переносятся из GameScreen.
 Поставщик: `scripts/game/presentation/hud.lua`.
 [Карточка модуля](../../../../design/architecture/modules/lua/hud.md).
