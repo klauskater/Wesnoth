@@ -1,8 +1,34 @@
 use std::path::{Path, PathBuf};
-use wesnoth_engine::game::Game;
+use wesnoth_engine::{
+    adventure::Adventure,
+    game::{self, Game},
+    value::Value,
+};
+
 fn scripts() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts")
 }
+
+fn cell_code(value: &Value) -> &str {
+    value.get("terrain").and_then(Value::as_str).unwrap()
+}
+
+fn campaign_game(chapter: usize) -> Game {
+    let scripts = scripts();
+    let manifest = std::fs::read_to_string(scripts.join("adventures/two_brothers.wml")).unwrap();
+    let adventure = Adventure::parse(&manifest).unwrap();
+    Game::start(
+        game::load_adventure_resources(
+            scripts,
+            &adventure,
+            &adventure.scenarios[chapter],
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn loads_first_battle() {
     let mut game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
@@ -20,7 +46,7 @@ fn loads_first_battle() {
         .iter()
         .filter(|code| {
             matches!(
-                wesnoth_engine::terrain::visual_codes(code).0,
+                wesnoth_engine::terrain::visual_codes(cell_code(code)).0,
                 "grassland" | "Gg"
             )
         })
@@ -37,7 +63,7 @@ fn loads_first_battle() {
         .map()
         .cells
         .iter()
-        .filter(|code| code.as_str() == "forest")
+        .filter(|code| cell_code(code) == "forest")
         .count();
     assert_eq!(
         terrain
@@ -74,7 +100,7 @@ fn loads_first_battle() {
 
 #[test]
 fn loads_dirt_bases_and_sprite_based_grass_transitions() {
-    let game = Game::load(scripts(), "scenarios/rooting_out_a_mage.wml").unwrap();
+    let game = campaign_game(0);
     let terrain =
         wesnoth_engine::terrain_scene::TerrainScene::from_lua(game.map(), game.terrain_scripts())
             .unwrap();
@@ -82,7 +108,7 @@ fn loads_dirt_bases_and_sprite_based_grass_transitions() {
         .map()
         .cells
         .iter()
-        .filter(|code| wesnoth_engine::terrain::visual_codes(code).0 == "Re")
+        .filter(|code| wesnoth_engine::terrain::visual_codes(cell_code(code)).0 == "Re")
         .count();
     assert_eq!(
         terrain
@@ -98,7 +124,7 @@ fn loads_dirt_bases_and_sprite_based_grass_transitions() {
         .iter()
         .filter(|code| {
             matches!(
-                wesnoth_engine::terrain::visual_codes(code).0,
+                wesnoth_engine::terrain::visual_codes(cell_code(code)).0,
                 "grassland" | "Gg" | "Gs" | "Gd" | "Gll"
             )
         })
@@ -130,13 +156,16 @@ fn loads_dirt_bases_and_sprite_based_grass_transitions() {
 
 #[test]
 fn loads_original_road_assets_for_each_campaign_map() {
-    for scenario in [
+    for (chapter, scenario) in [
         "scenarios/rooting_out_a_mage.wml",
         "scenarios/the_chase.wml",
         "scenarios/guarded_castle.wml",
         "scenarios/return_to_the_village.wml",
-    ] {
-        let game = Game::load(scripts(), scenario).unwrap();
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let game = campaign_game(chapter);
         assert_eq!(game.terrain_scripts()[0].family, "road");
         let terrain = wesnoth_engine::terrain_scene::TerrainScene::from_lua(
             game.map(),
@@ -149,7 +178,7 @@ fn loads_original_road_assets_for_each_campaign_map() {
             .iter()
             .filter(|code| {
                 matches!(
-                    wesnoth_engine::terrain::visual_codes(code).0,
+                    wesnoth_engine::terrain::visual_codes(cell_code(code)).0,
                     "Rd" | "Rr" | "Rp"
                 )
             })
@@ -172,13 +201,16 @@ fn loads_original_road_assets_for_each_campaign_map() {
 #[test]
 fn loads_original_decorations_for_each_campaign_map() {
     let decoration_codes = ["Efm", "Gvs", "Es", "Em", "Edb", "Eff", "Wm"];
-    for scenario in [
+    for (chapter, scenario) in [
         "scenarios/rooting_out_a_mage.wml",
         "scenarios/the_chase.wml",
         "scenarios/guarded_castle.wml",
         "scenarios/return_to_the_village.wml",
-    ] {
-        let game = Game::load(scripts(), scenario).unwrap();
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let game = campaign_game(chapter);
         let terrain = wesnoth_engine::terrain_scene::TerrainScene::from_lua(
             game.map(),
             game.terrain_scripts(),
@@ -191,7 +223,7 @@ fn loads_original_decorations_for_each_campaign_map() {
             .collect::<Vec<_>>();
 
         for (index, code) in game.map().cells.iter().enumerate() {
-            let (_, overlay) = wesnoth_engine::terrain::visual_codes(code);
+            let (_, overlay) = wesnoth_engine::terrain::visual_codes(cell_code(code));
             if decoration_codes.contains(&overlay) {
                 let position = wesnoth_engine::engine::Position {
                     x: (index % game.map().width + 1) as i64,
@@ -201,7 +233,8 @@ fn loads_original_decorations_for_each_campaign_map() {
                     decoration_sprites
                         .iter()
                         .any(|sprite| sprite.anchor == position),
-                    "{scenario}: no decoration sprite for {code} at {position:?}"
+                    "{scenario}: no decoration sprite for {} at {position:?}",
+                    cell_code(code)
                 );
             }
         }
@@ -225,13 +258,16 @@ fn loads_original_decorations_for_each_campaign_map() {
 #[test]
 fn loads_original_hills_mountains_and_peaks_for_each_campaign_map() {
     let mut checked_long_ranges = 0;
-    for scenario in [
+    for (chapter, scenario) in [
         "scenarios/rooting_out_a_mage.wml",
         "scenarios/the_chase.wml",
         "scenarios/guarded_castle.wml",
         "scenarios/return_to_the_village.wml",
-    ] {
-        let game = Game::load(scripts(), scenario).unwrap();
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let game = campaign_game(chapter);
         let terrain = wesnoth_engine::terrain_scene::TerrainScene::from_lua(
             game.map(),
             game.terrain_scripts(),
@@ -243,7 +279,7 @@ fn loads_original_hills_mountains_and_peaks_for_each_campaign_map() {
             .iter()
             .filter(|code| {
                 matches!(
-                    wesnoth_engine::terrain::visual_codes(code).0,
+                    wesnoth_engine::terrain::visual_codes(cell_code(code)).0,
                     "Hh" | "Hd" | "Mm"
                 )
             })
@@ -261,7 +297,7 @@ fn loads_original_hills_mountains_and_peaks_for_each_campaign_map() {
             .map()
             .cells
             .iter()
-            .filter(|code| wesnoth_engine::terrain::visual_codes(code).0 == "Hd")
+            .filter(|code| wesnoth_engine::terrain::visual_codes(cell_code(code)).0 == "Hd")
             .count();
         assert_eq!(
             terrain
@@ -280,7 +316,7 @@ fn loads_original_hills_mountains_and_peaks_for_each_campaign_map() {
             .map()
             .cells
             .iter()
-            .any(|code| wesnoth_engine::terrain::visual_codes(code).0 == "Mm")
+            .any(|code| wesnoth_engine::terrain::visual_codes(cell_code(code)).0 == "Mm")
         {
             assert!(terrain.world().iter().any(|sprite| {
                 sprite.family == "hills" && sprite.frames.assets[0].starts_with("hills:basic")
@@ -325,7 +361,9 @@ fn loads_original_hills_mountains_and_peaks_for_each_campaign_map() {
             .cells
             .iter()
             .enumerate()
-            .filter(|(_, code)| wesnoth_engine::terrain::visual_codes(code).1 == "Xm")
+            .filter(|(_, code)| {
+                wesnoth_engine::terrain::visual_codes(cell_code(code)).1 == "Xm"
+            })
             .map(|(index, _)| wesnoth_engine::engine::Position {
                 x: (index % game.map().width + 1) as i64,
                 y: (index / game.map().width + 1) as i64,

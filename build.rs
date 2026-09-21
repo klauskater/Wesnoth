@@ -51,6 +51,33 @@ fn main() {
     )
     .unwrap();
 
+    let assets = Path::new(&manifest).join("assets");
+    let mut asset_files = Vec::new();
+    collect_all(&assets, &mut asset_files);
+    asset_files.sort();
+    let asset_arms = asset_files
+        .iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(&manifest)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            format!(
+                "        {:?} => Some(include_bytes!({:?}).as_slice()),\n",
+                relative,
+                path.to_string_lossy()
+            )
+        })
+        .collect::<String>();
+    fs::write(
+        Path::new(&env::var("OUT_DIR").unwrap()).join("embedded_assets.rs"),
+        format!(
+            "pub fn get_bytes(path: &str) -> Option<&'static [u8]> {{\n    match path.replace('\\\\', \"/\").as_str() {{\n{asset_arms}        _ => None,\n    }}\n}}\n"
+        ),
+    )
+    .unwrap();
+
     let art_root = Path::new(&manifest).join("assets/wesnoth/core-units");
     let index = fs::read_to_string(art_root.join("index.tsv")).unwrap()
         + &fs::read_to_string(art_root.join("directions.tsv")).unwrap();
@@ -126,6 +153,17 @@ fn collect(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
         } else if path.extension().is_some_and(|extension| {
             extension == "wml" || extension == "lua" || extension == "json"
         }) {
+            files.push(path);
+        }
+    }
+}
+
+fn collect_all(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_all(&path, files);
+        } else {
             files.push(path);
         }
     }

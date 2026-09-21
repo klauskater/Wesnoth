@@ -1,19 +1,20 @@
-//! Sequential command orchestration and the sole Store commit owner.
+//! Протокольный адаптер поверх минимального [`Engine`](super::Engine).
 //!
-//! Game rules remain opaque to this module. Contract:
-//! `contracts/target/modules/engine/session.md`.
+//! Этот модуль пока сохраняет доставку команд, состояние наблюдателей и старый
+//! протокол представления. Авторитетным миром и выполнением изменяющих скриптов
+//! он больше не владеет: эти обязанности находятся в `Engine`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
+    Engine, EngineError,
     persistence,
     protocol::{
         self, Action, Command, CommandResult, CommandStatus, Effect, Error, Interaction,
         InteractionKind, Message, Presentation, ViewBlock, ViewSnapshot, ViewUpdate,
     },
     resources::PackageIdentity,
-    runtime::{Runtime, RuntimeError},
-    store::{Commit, Store, StoreSnapshot, World},
+    store::{Commit, StoreSnapshot, World},
     value::Value,
 };
 
@@ -61,8 +62,7 @@ pub struct Session {
     generation: u64,
     package: PackageIdentity,
     assets: BTreeSet<String>,
-    runtime: Runtime,
-    store: Store,
+    engine: Engine,
     commands: BTreeMap<String, CachedCommand>,
     viewers: BTreeMap<String, Viewer>,
     interactions: BTreeMap<String, CachedInteraction>,
@@ -99,15 +99,14 @@ impl Session {
                 protocol::PROTOCOL_VERSION
             ));
         }
-        let (runtime, store) = Runtime::load_entry(world, seed, modules, &entry)?;
+        let engine = Engine::load(world, seed, modules, &entry)?;
         Ok(Self {
             root_id: id.clone(),
             id,
             generation: 0,
             package,
             assets,
-            runtime,
-            store,
+            engine,
             commands: BTreeMap::new(),
             viewers: BTreeMap::new(),
             interactions: BTreeMap::new(),
@@ -131,15 +130,15 @@ impl Session {
     }
 
     pub(crate) fn world(&self) -> &World {
-        self.store.world()
+        self.engine.world()
     }
 
     pub fn world_revision(&self) -> u64 {
-        self.store.revision()
+        self.engine.revision()
     }
 
     pub fn save(&self) -> Result<Vec<u8>, Error> {
-        persistence::encode(self.package.clone(), self.store.snapshot())
+        persistence::encode(self.package.clone(), self.engine.snapshot())
     }
 
     pub fn restore(&mut self, bytes: &[u8]) -> Result<(), Error> {
@@ -148,13 +147,9 @@ impl Session {
     }
 
     fn initialize(&mut self, request: Value) -> Result<Value, String> {
-        let transaction = self.store.begin(self.store.revision())?;
-        let (value, transaction) = self
-            .runtime
-            .initialize(transaction, request)
-            .map_err(|error| error.to_string())?;
-        self.store.commit(transaction)?;
-        Ok(value)
+        self.engine
+            .initialize(request)
+            .map_err(|error| error.message)
     }
 
     pub fn snapshot(&mut self, viewer: &str) -> Result<ViewSnapshot, String> {
@@ -172,11 +167,10 @@ impl Session {
             ("events".into(), Value::List(Vec::new())),
             ("command_id".into(), Value::String("snapshot".into())),
         ]));
-        let transaction = self.store.begin(self.store.revision())?;
         let presentation = parse_presentation(
-            self.runtime
-                .present(transaction, request)
-                .map_err(|error| error.to_string())?,
+            self.engine
+                .read_script("present", request)
+                .map_err(|error| error.message)?,
         )?;
         let state = self.viewers.entry(viewer.into()).or_default();
         let mut blocks = state.blocks.clone();
@@ -194,7 +188,7 @@ impl Session {
             state.blocks = blocks;
         }
         let snapshot = ViewSnapshot {
-            world_revision: self.store.revision(),
+            world_revision: self.engine.revision(),
             view_revision: state.revision,
             blocks: state
                 .blocks
@@ -214,7 +208,7 @@ impl Session {
         if viewer.is_empty() {
             return rejected(
                 &command,
-                self.store.revision(),
+                self.engine.revision(),
                 "invalid_input",
                 "viewer id must not be empty",
             );
@@ -225,7 +219,7 @@ impl Session {
             } else {
                 rejected(
                     &command,
-                    self.store.revision(),
+                    self.engine.revision(),
                     "conflict",
                     "command id was already used with different content",
                 )
@@ -237,7 +231,7 @@ impl Session {
                 result: CommandResult {
                     command_id: command.command_id,
                     status: CommandStatus::Rejected,
-                    world_revision: self.store.revision(),
+                    world_revision: self.engine.revision(),
                     error: Some(error),
                 },
                 events: None,
@@ -247,27 +241,19 @@ impl Session {
             };
         }
 
-        let mut dispatch = if command.expected_world_revision != self.store.revision() {
+        let mut dispatch = if command.expected_world_revision != self.engine.revision() {
             rejected(
                 &command,
-                self.store.revision(),
+                self.engine.revision(),
                 "conflict",
                 "stale world revision",
             )
         } else {
-            let executed = match self.store.begin(command.expected_world_revision) {
-                Err(message) => Err(Error::new("conflict", message)),
-                Ok(transaction) => {
-                    match self.runtime.dispatch(transaction, command_value(&command)) {
-                        Err(error) => Err(runtime_error(error)),
-                        Ok((events, transaction)) => self
-                            .store
-                            .commit(transaction)
-                            .map(|commit| (events, commit))
-                            .map_err(|message| Error::new("conflict", message)),
-                    }
-                }
-            };
+            let executed = self
+                .engine
+                .user_event(command.expected_world_revision, command_value(&command))
+                .map(|change| (change.output, change.commit))
+                .map_err(engine_error);
             match executed {
                 Ok((events, commit)) => Dispatch {
                     result: CommandResult {
@@ -281,7 +267,7 @@ impl Session {
                     view: None,
                     presentation_error: None,
                 },
-                Err(error) => rejected_with_error(&command, self.store.revision(), error),
+                Err(error) => rejected_with_error(&command, self.engine.revision(), error),
             }
         };
         if dispatch.result.status == CommandStatus::Committed {
@@ -376,7 +362,7 @@ impl Session {
             ("target".into(), interaction.target.clone()),
             ("payload".into(), interaction.payload.clone()),
         ]));
-        let world_revision = i64::try_from(self.store.revision())
+        let world_revision = i64::try_from(self.engine.revision())
             .map_err(|_| Error::new("conflict", "world revision exceeds Value integer range"))?;
         let request = Value::Map(BTreeMap::from([
             ("viewer".into(), Value::String(viewer.into())),
@@ -384,14 +370,10 @@ impl Session {
             ("world_revision".into(), Value::Integer(world_revision)),
             ("input".into(), input),
         ]));
-        let transaction = self
-            .store
-            .begin(self.store.revision())
-            .map_err(|message| Error::new("conflict", message))?;
         let result = parse_interaction_result(
-            self.runtime
-                .interact(transaction, request)
-                .map_err(runtime_error)?,
+            self.engine
+                .read_script("interact", request)
+                .map_err(engine_error)?,
         )
         .map_err(|message| Error::new("script_error", message))?;
         self.viewers.entry(viewer.into()).or_default().context = Some(result.0);
@@ -400,7 +382,7 @@ impl Session {
                 viewer,
                 Command {
                     command_id: format!("interaction:{}", interaction.interaction_id),
-                    expected_world_revision: self.store.revision(),
+                    expected_world_revision: self.engine.revision(),
                     action: action.action,
                     payload: action.payload,
                 },
@@ -446,14 +428,10 @@ impl Session {
             ),
             ("command_id".into(), Value::String(command_id.into())),
         ]));
-        let transaction = self
-            .store
-            .begin(self.store.revision())
-            .map_err(|message| Error::new("conflict", message))?;
         let presentation = parse_presentation(
-            self.runtime
-                .present(transaction, request)
-                .map_err(runtime_error)?,
+            self.engine
+                .read_script("present", request)
+                .map_err(engine_error)?,
         )
         .map_err(|message| Error::new("script_error", message))?;
         let state = self.viewers.entry(viewer.into()).or_default();
@@ -473,7 +451,7 @@ impl Session {
             .checked_add(1)
             .ok_or_else(|| Error::new("conflict", "view revision exhausted"))?;
         let update = ViewUpdate {
-            world_revision: self.store.revision(),
+            world_revision: self.engine.revision(),
             base_view_revision: base,
             view_revision: revision,
             replace_blocks: presentation.replace_blocks,
@@ -487,19 +465,11 @@ impl Session {
     }
 
     fn restore_store(&mut self, snapshot: StoreSnapshot) -> Result<(), Error> {
-        let store = Store::from_snapshot(snapshot)
-            .map_err(|message| Error::new("invalid_input", message))?;
-        let transaction = store
-            .begin(store.revision())
-            .map_err(|message| Error::new("conflict", message))?;
-        self.runtime
-            .validate_restored(transaction)
-            .map_err(runtime_error)?;
+        self.engine.restore(snapshot).map_err(engine_error)?;
         let generation = self
             .generation
             .checked_add(1)
             .ok_or_else(|| Error::new("conflict", "session generation exhausted"))?;
-        self.store = store;
         self.generation = generation;
         self.id = format!("{}@{generation}", self.root_id);
         self.commands.clear();
@@ -625,8 +595,8 @@ fn interaction_failure(interaction_id: &str, error: Error) -> InteractionDeliver
     }
 }
 
-fn runtime_error(error: RuntimeError) -> Error {
-    Error::new(error.code(), error.to_string())
+fn engine_error(error: EngineError) -> Error {
+    Error::new(error.code, error.message)
 }
 
 #[cfg(test)]
@@ -645,10 +615,6 @@ mod tests {
 
     #[test]
     fn retries_are_deduplicated_before_revision_checks() {
-        assert_eq!(
-            runtime_error(RuntimeError::BudgetExceeded).code,
-            "budget_exceeded"
-        );
         let mut session = Session::load_entry(SessionInput {
             id: "test".into(),
             package: PackageIdentity {
@@ -661,10 +627,10 @@ mod tests {
                 map: Map {
                     width: 1,
                     height: 1,
-                    cells: vec!["Gg".into()],
+                    cells: vec![Value::Map(BTreeMap::new())],
                 },
-                objects: BTreeMap::new(),
-                state: BTreeMap::new(),
+                entities: BTreeMap::new(),
+                data: BTreeMap::new(),
             },
             seed: 1,
             modules: BTreeMap::from([(
@@ -714,7 +680,7 @@ mod tests {
                 .code,
             "invalid_input"
         );
-        assert_eq!(session.world().state["count"], Value::Integer(1));
+        assert_eq!(session.world().data["count"], Value::Integer(1));
 
         let conflict = session.dispatch("viewer", command("c1", 0, Value::Bool(true)));
         assert_eq!(conflict.result.status, CommandStatus::Rejected);
@@ -754,25 +720,25 @@ mod tests {
             session.interact("alice", interaction).command,
             delivery.command
         );
-        assert_eq!(session.world().state["count"], Value::Integer(2));
+        assert_eq!(session.world().data["count"], Value::Integer(2));
 
         let saved = session.save().unwrap();
         let original_id = session.id().to_owned();
         session.dispatch("viewer", command("c3", 2, Value::Null));
-        assert_eq!(session.world().state["count"], Value::Integer(3));
+        assert_eq!(session.world().data["count"], Value::Integer(3));
         session.restore(&saved).unwrap();
         assert_ne!(session.id(), original_id);
         let restored_id = session.id().to_owned();
-        assert_eq!(session.world().state["count"], Value::Integer(2));
+        assert_eq!(session.world().data["count"], Value::Integer(2));
         let mut invalid: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-        invalid["store"]["world"]["state"]["count"] = 99.into();
+        invalid["store"]["world"]["data"]["count"] = 99.into();
         assert!(
             session
                 .restore(&serde_json::to_vec(&invalid).unwrap())
                 .is_err()
         );
         assert_eq!(session.id(), restored_id);
-        assert_eq!(session.world().state["count"], Value::Integer(2));
+        assert_eq!(session.world().data["count"], Value::Integer(2));
     }
 
     #[test]
@@ -789,10 +755,10 @@ mod tests {
                 map: Map {
                     width: 1,
                     height: 1,
-                    cells: vec!["Gg".into()],
+                    cells: vec![Value::Map(BTreeMap::new())],
                 },
-                objects: BTreeMap::new(),
-                state: BTreeMap::new(),
+                entities: BTreeMap::new(),
+                data: BTreeMap::new(),
             },
             seed: 1,
             modules: BTreeMap::from([(
@@ -820,10 +786,10 @@ mod tests {
         let request = command("c1", 0, Value::Null);
         let failed = session.dispatch("viewer", request.clone());
         assert_eq!(failed.result.status, CommandStatus::Committed);
-        assert_eq!(session.world().state["count"], Value::Integer(1));
+        assert_eq!(session.world().data["count"], Value::Integer(1));
         assert!(failed.view.is_none() && failed.presentation_error.is_some());
         assert_eq!(session.dispatch("viewer", request), failed);
-        assert_eq!(session.world().state["count"], Value::Integer(1));
+        assert_eq!(session.world().data["count"], Value::Integer(1));
 
         let snapshot = session.snapshot("viewer").unwrap();
         assert_eq!(snapshot.world_revision, 1);

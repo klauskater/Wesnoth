@@ -2,6 +2,9 @@
 local terrain = {}
 
 function terrain.kind(code)
+    if type(code) == "table" then
+        code = assert(code.terrain, "map cell has no terrain field")
+    end
     local base, overlay = code:match("^%d*%s*([^%^]+)%^?(.*)$")
     if overlay:sub(1, 1) == "B" then return "grassland" end
     if overlay:sub(1, 1) == "V" then return "village" end
@@ -20,7 +23,11 @@ end
 
 function terrain.install(context)
     if context.map.raw then return context end
-    context.map.raw = context.map.get
+    local cell = context.map.get
+    context.map.raw = function(self, position)
+        local value = cell(self, position)
+        return assert(value.terrain, "map cell has no terrain field")
+    end
     context.map.get = function(self, position)
         return terrain.kind(self:raw(position))
     end

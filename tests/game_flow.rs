@@ -1,13 +1,28 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use wesnoth_engine::{
+    adventure::Adventure,
     engine::{
         Position,
         protocol::{CommandStatus, Interaction, InteractionKind},
     },
-    game::Game,
+    game::{self as game_api, CampaignState, Game},
     value::Value,
 };
+
+fn two_brothers(chapter: usize, campaign: Option<&CampaignState>) -> Game {
+    let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    let manifest = std::fs::read_to_string(scripts.join("adventures/two_brothers.wml")).unwrap();
+    let adventure = Adventure::parse(&manifest).unwrap();
+    let resources = game_api::load_adventure_resources(
+        scripts,
+        &adventure,
+        &adventure.scenarios[chapter],
+        campaign,
+    )
+    .unwrap();
+    Game::start(resources).unwrap()
+}
 
 fn game() -> Game {
     Game::load(
@@ -34,35 +49,19 @@ fn outpost() -> Game {
 }
 
 fn rooting_out_a_mage() -> Game {
-    Game::load(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/rooting_out_a_mage.wml",
-    )
-    .unwrap()
+    two_brothers(0, None)
 }
 
 fn the_chase() -> Game {
-    Game::load(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/the_chase.wml",
-    )
-    .unwrap()
+    two_brothers(1, None)
 }
 
 fn guarded_castle() -> Game {
-    Game::load(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/guarded_castle.wml",
-    )
-    .unwrap()
+    two_brothers(2, None)
 }
 
 fn return_to_the_village() -> Game {
-    Game::load(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/return_to_the_village.wml",
-    )
-    .unwrap()
+    two_brothers(3, None)
 }
 
 fn control_test() -> Game {
@@ -1286,12 +1285,7 @@ fn campaign_transition_preserves_the_leader_and_puts_veterans_on_recall() {
         Some("Spearman")
     );
 
-    let mut second = Game::load_with_campaign(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/the_chase.wml",
-        Some(&state),
-    )
-    .unwrap();
+    let mut second = two_brothers(1, Some(&state));
     second.acknowledge_dialog().unwrap();
     let snapshot = second.view_snapshot("recall-test").unwrap();
     let destination = snapshot
@@ -1475,27 +1469,12 @@ fn campaign_state_survives_the_whole_campaign() {
     first.acknowledge_dialog().unwrap();
     let first_state = first.campaign_state().unwrap();
 
-    let mut second = Game::load_with_campaign(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/the_chase.wml",
-        Some(&first_state),
-    )
-    .unwrap();
+    let mut second = two_brothers(1, Some(&first_state));
     let second_state = second.campaign_state().unwrap();
-    let mut third = Game::load_with_campaign(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/guarded_castle.wml",
-        Some(&second_state),
-    )
-    .unwrap();
+    let mut third = two_brothers(2, Some(&second_state));
 
     let third_state = third.campaign_state().unwrap();
-    let mut fourth = Game::load_with_campaign(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        "scenarios/return_to_the_village.wml",
-        Some(&third_state),
-    )
-    .unwrap();
+    let mut fourth = two_brothers(3, Some(&third_state));
 
     let Value::List(objects) = fourth.snapshot().unwrap().objects else {
         panic!()

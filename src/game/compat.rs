@@ -51,7 +51,7 @@ impl Game {
         let Some(dialog) = self
             .session
             .world()
-            .state
+            .data
             .get("pending_dialog")
             .and_then(Value::as_str)
         else {
@@ -123,7 +123,7 @@ impl Game {
     }
 
     pub fn acknowledge_dialog(&mut self) -> Result<(), String> {
-        if !self.session.world().state.contains_key("pending_dialog") {
+        if !self.session.world().data.contains_key("pending_dialog") {
             return Err("no dialog is waiting for the UI".into());
         }
         let command_id = self.compat.next_command_id;

@@ -1,8 +1,10 @@
 use wesnoth_engine::{
+    adventure::Adventure,
     engine::Map,
-    game::Game,
+    game::{self, Game},
     terrain_scene::{TerrainPass, TerrainScene, TerrainScript},
 };
+
 fn scene(map: &Map) -> TerrainScene {
     TerrainScene::from_lua(
         map,
@@ -125,13 +127,12 @@ fn dry_castle_floor_blends_into_flooded_floor_in_every_direction() {
 
 #[test]
 fn campaign_castles_resolve_assets_and_world_depth() {
-    for name in [
-        "rooting_out_a_mage",
-        "the_chase",
-        "guarded_castle",
-        "return_to_the_village",
-    ] {
-        let game = Game::load("scripts", &format!("scenarios/{name}.wml")).unwrap();
+    let manifest = std::fs::read_to_string("scripts/adventures/two_brothers.wml").unwrap();
+    let adventure = Adventure::parse(&manifest).unwrap();
+    for chapter in &adventure.scenarios {
+        let resources =
+            game::load_adventure_resources("scripts", &adventure, chapter, None).unwrap();
+        let game = Game::start(resources).unwrap();
         let scene = TerrainScene::from_lua(game.map(), game.terrain_scripts()).unwrap();
         assert!(scene.world().iter().any(|s| s.family == "castle"));
         for s in scene

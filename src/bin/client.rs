@@ -1,13 +1,35 @@
+//! Оболочка графического клиента.
+//!
+//! Этот файл отвечает только за приложение в целом:
+//!
+//! - создаёт системное окно и двигает цикл кадров Macroquad;
+//! - показывает главное меню и экран выбора приключения;
+//! - передаёт выбранное приключение в [`resource_loader::ResourceLoader`];
+//! - создаёт и удаляет окно игры при входе в игру и выходе из неё.
+//!
+//! Здесь намеренно нет выполнения игровых правил и отрисовки игрового мира.
+//! После запуска игры границей её жизненного цикла становится
+//! [`screens::game::GameScreen`]. Он связывает движок с игровым интерфейсом,
+//! а этот файл реагирует только на действия уровня окна, например «вернуться
+//! в меню».
+
+// Модули, из которых собран клиент. Они объявлены здесь потому, что этот файл —
+// корень бинарного крейта `wesnoth-client`. Само объявление модуля не означает,
+// что оболочка приложения отвечает за работу этого модуля.
 #[path = "client/battle.rs"]
 mod battle;
 #[path = "client/connection.rs"]
 mod connection;
+#[path = "client/game_engine.rs"]
+mod game_engine;
+#[path = "client/game_ui.rs"]
+mod game_ui;
 use macroquad::prelude::*;
-use wesnoth_engine::{adventure::Adventure, game::Game};
+use wesnoth_engine::adventure::Adventure;
 
-// Export the standard hybrid-graphics hints so Optimus/PowerXpress selects the
-// discrete GPU. Intel HD 3000 cannot create the OpenGL core profile miniquad
-// requires on Windows.
+// Экспортируем стандартные подсказки для гибридной графики, чтобы
+// Optimus/PowerXpress выбрал дискретную видеокарту. Intel HD 3000 не может
+// создать профиль OpenGL Core, который требуется miniquad в Windows.
 #[cfg(target_os = "windows")]
 #[unsafe(no_mangle)]
 #[used]
@@ -26,6 +48,8 @@ mod map_renderer;
 mod map_viewport;
 #[path = "client/movement.rs"]
 mod movement;
+#[path = "client/resource_loader.rs"]
+mod resource_loader;
 #[path = "client/scene.rs"]
 mod scene;
 #[path = "client/screens/mod.rs"]
@@ -41,6 +65,11 @@ use widgets::{DESIGN_HEIGHT, DESIGN_WIDTH, Ui, draw_background};
 
 const ADVENTURES_DIR: &str = "adventures";
 
+/// Текущее окно приложения верхнего уровня.
+///
+/// Это не состояние самой игры. Вариант `Game` означает только «сейчас открыто
+/// окно игры». Сам игровой мир принадлежит движку, а визуальное состояние —
+/// модулю игрового интерфейса.
 #[derive(Clone, Copy, PartialEq)]
 enum Screen {
     Main,
@@ -61,6 +90,9 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    // Эти ресурсы принадлежат оболочке приложения и нужны меню. Они не относятся
+    // к выбранному приключению. Игровые ресурсы приключения позже загрузит
+    // `ResourceLoader` и положит в отдельные контексты движка и интерфейса.
     let font = load_ttf_font_from_bytes(include_bytes!("../../assets/fonts/DejaVuSans.ttf"))
         .expect("embedded DejaVu Sans font");
     let background = Texture2D::from_file_with_format(
@@ -69,6 +101,8 @@ async fn main() {
     );
     background.set_filter(FilterMode::Linear);
 
+    // Здесь читается только список доступных приключений. Сценарий ещё не
+    // загружается, движок не создаётся, игровой интерфейс не запускается.
     let (adventures, catalog_error) = load_adventures();
     let mut screen = Screen::Main;
     let mut selected = 0usize;
@@ -76,6 +110,9 @@ async fn main() {
     let mut launch_error: Option<String> = None;
 
     loop {
+        // Оболочка читает ввод для экранов меню. Когда открыт `Screen::Game`,
+        // ввод самостоятельно читает и истолковывает игровой интерфейс внутри
+        // `GameScreen::draw`.
         let ui = Ui::new();
         let input = ui.input();
         if screen != Screen::Game {
@@ -103,8 +140,13 @@ async fn main() {
                 screens::adventures::Action::Back => screen = Screen::Main,
                 screens::adventures::Action::Start => {
                     launch_error = None;
-                    match load_game(&adventures[selected].scenarios[0]) {
-                        Ok(game) => match screens::game::GameScreen::new(game).await {
+                    // Это единственное место запуска игры в оболочке приложения.
+                    // Загрузчик превращает выбранное приключение в два готовых
+                    // контекста: один для движка, другой для интерфейса. Окно
+                    // получает готовый комплект и запускает обе части. Само окно
+                    // не ищет и не читает ресурсы.
+                    match resource_loader::ResourceLoader::load(&adventures[selected]) {
+                        Ok(resources) => match screens::game::GameScreen::new(resources) {
                             Ok(window) => {
                                 game_screen = Some(window);
                                 screen = Screen::Game;
@@ -116,11 +158,15 @@ async fn main() {
                 }
             },
             Screen::Game => {
+                // Один вызов обрабатывает один кадр игры. Назад в оболочку
+                // приложения возвращается только команда навигации между окнами.
+                // Игровые события и изменения мира остаются внутри цепочки
+                // GameScreen -> GameEngine -> GameUi.
                 let action = game_screen
                     .as_mut()
-                    .map(|screen| screen.draw(&font))
-                    .unwrap_or(screens::game::Action::Back);
-                if matches!(action, screens::game::Action::Back) {
+                    .map(|screen| screen.draw())
+                    .unwrap_or(screens::game::Action::ExitToMenu);
+                if matches!(action, screens::game::Action::ExitToMenu) {
                     screen = Screen::Adventures;
                 }
             }
@@ -132,6 +178,8 @@ async fn main() {
 
 #[cfg(not(target_os = "android"))]
 fn load_adventures() -> (Vec<Adventure>, Option<String>) {
+    // На компьютере каталог берётся из отдельных WML-файлов в каталоге scripts.
+    // Эта функция загружает только описания приключений, но не их сценарии.
     use std::fs;
 
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -163,6 +211,8 @@ fn load_adventures() -> (Vec<Adventure>, Option<String>) {
 
 #[cfg(target_os = "android")]
 fn load_adventures() -> (Vec<Adventure>, Option<String>) {
+    // На Android во время работы нет дерева файлов проекта, поэтому те же
+    // описания читаются из ресурсов, встроенных скриптом build.rs.
     let prefix = format!("{ADVENTURES_DIR}/");
     load_catalog(
         wesnoth_engine::embedded::paths(&prefix)
@@ -174,6 +224,9 @@ fn load_adventures() -> (Vec<Adventure>, Option<String>) {
 fn load_catalog(
     sources: impl Iterator<Item = (String, Result<String, String>)>,
 ) -> (Vec<Adventure>, Option<String>) {
+    // Ошибка в одном описании не должна скрывать остальные приключения. Рабочие
+    // записи отправляются на экран выбора, а ошибки чтения и разбора возвращаются
+    // рядом с ними, чтобы экран мог сообщить о неполном каталоге.
     let mut adventures = Vec::new();
     let mut errors = Vec::new();
     for (path, source) in sources {
@@ -185,17 +238,4 @@ fn load_catalog(
     adventures.sort_by(|left, right| left.name.cmp(&right.name));
     let error = (!errors.is_empty()).then(|| errors.join("\n"));
     (adventures, error)
-}
-
-#[cfg(not(target_os = "android"))]
-fn load_game(scenario: &str) -> Result<Game, String> {
-    Game::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-        scenario,
-    )
-}
-
-#[cfg(target_os = "android")]
-fn load_game(scenario: &str) -> Result<Game, String> {
-    Game::load_from(scenario, &wesnoth_engine::embedded::read)
 }

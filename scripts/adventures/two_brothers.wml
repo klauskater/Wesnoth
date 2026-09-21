@@ -3,16 +3,33 @@ id=two_brothers
 name=Два брата
 description=Арвит отправляется на поиски пропавшего брата. Четыре связанных сценария образуют одно приключение, а выжившие бойцы и часть золота переходят между главами.
 
+[rules]
+game=rules.basic_combat
+combat=game.rules.combat
+[/rules]
+
+[units]
+source=units/core-1.18.8.wml
+[/units]
+
 [scenario]
-path=scenarios/rooting_out_a_mage.wml
+process=scenarios/rooting_out_a_mage.wml
+map=maps/rooting_out_a_mage.wml
+dialogs=dialogs/rooting_out_a_mage.wml
 [/scenario]
 [scenario]
-path=scenarios/the_chase.wml
+process=scenarios/the_chase.wml
+map=maps/the_chase.wml
+dialogs=dialogs/the_chase.wml
 [/scenario]
 [scenario]
-path=scenarios/guarded_castle.wml
+process=scenarios/guarded_castle.wml
+map=maps/guarded_castle.wml
+dialogs=dialogs/guarded_castle.wml
 [/scenario]
 [scenario]
-path=scenarios/return_to_the_village.wml
+process=scenarios/return_to_the_village.wml
+map=maps/return_to_the_village.wml
+dialogs=dialogs/return_to_the_village.wml
 [/scenario]
 [/adventure]

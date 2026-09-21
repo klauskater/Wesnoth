@@ -4,28 +4,28 @@ use std::{
     path::Path,
 };
 
-use super::{CampaignState, DialogLine};
+use super::{CampaignState, DialogLine, EngineResources, Initialization};
 use crate::{
+    adventure::{Adventure, AdventureScenario},
     engine::{
         World,
         resources::Package,
-        session::{Session, SessionInput},
+        session::SessionInput,
     },
     map::{MapTiles, load_map},
-    terrain_scene::{TerrainScene, TerrainScript},
+    terrain_scene::TerrainScene,
     value::Value,
     wml::{self, Node},
 };
 
-pub(super) struct LoadedScenario {
-    pub id: String,
-    pub name: String,
-    pub start_dialog: String,
-    pub session: Session,
-    pub map_tiles: MapTiles,
-    pub terrain_scripts: Vec<TerrainScript>,
-    pub scene_assets: BTreeMap<String, String>,
-    pub dialogs: BTreeMap<String, Vec<DialogLine>>,
+struct ResourceSelection<'a> {
+    process: &'a str,
+    map: &'a str,
+    map_objects: &'a str,
+    unit_catalogs: Vec<&'a str>,
+    dialogs: &'a str,
+    game_rules: &'a str,
+    combat_rules: &'a str,
 }
 
 pub(super) fn filesystem(
@@ -52,7 +52,73 @@ pub(super) fn scenario(
     campaign: Option<&CampaignState>,
     read: &impl Fn(&str) -> Result<String, String>,
     saved: Option<&[u8]>,
-) -> Result<LoadedScenario, String> {
+) -> Result<EngineResources, String> {
+    // Проверяем путь через границу пакета до прямого чтения WML. Помимо защиты
+    // это сохраняет единый текст ошибки для файлового и встроенного источника.
+    Package::open(read)?.read_text(scenario_path)?;
+    let scenario_document = read_wml(scenario_path, read)?;
+    let scenario = one_root(&scenario_document, "scenario")?;
+    let resources = scenario.child("resources")?;
+    let rules = split_paths(resources.attribute("rules")?)
+        .map(lua_path_to_module)
+        .collect::<Result<Vec<_>, _>>()?;
+    build(
+        ResourceSelection {
+            process: scenario_path,
+            map: resources.attribute("map")?,
+            map_objects: resources.attribute("map_objects")?,
+            unit_catalogs: split_paths(resources.attribute("unit_types")?).collect(),
+            dialogs: resources.attribute("dialogs")?,
+            game_rules: rules
+                .iter()
+                .find(|module| module.as_str() == "rules.basic_combat")
+                .map(String::as_str)
+                .unwrap_or("rules.basic_combat"),
+            combat_rules: "game.rules.combat",
+        },
+        campaign,
+        read,
+        saved,
+    )
+}
+
+/// Собирает главу, начиная с манифеста приключения.
+///
+/// В отличие от временного сценарного пути выше, здесь сценарий не объявляет
+/// собственные ресурсы: состав юнитов и правила принадлежат приключению, карта
+/// объявляет свои тайлы, а сценарий содержит только игровой процесс.
+pub(super) fn adventure(
+    adventure: &Adventure,
+    chapter: &AdventureScenario,
+    campaign: Option<&CampaignState>,
+    read: &impl Fn(&str) -> Result<String, String>,
+    saved: Option<&[u8]>,
+) -> Result<EngineResources, String> {
+    let map_document = read_wml(&chapter.map, read)?;
+    let map = one_root(&map_document, "map")?;
+    let tiles = map.child("tiles")?.attribute("sources")?;
+    build(
+        ResourceSelection {
+            process: &chapter.process,
+            map: &chapter.map,
+            map_objects: tiles,
+            unit_catalogs: adventure.unit_catalogs.iter().map(String::as_str).collect(),
+            dialogs: &chapter.dialogs,
+            game_rules: &adventure.rules.game,
+            combat_rules: &adventure.rules.combat,
+        },
+        campaign,
+        read,
+        saved,
+    )
+}
+
+fn build(
+    selected: ResourceSelection<'_>,
+    campaign: Option<&CampaignState>,
+    read: &impl Fn(&str) -> Result<String, String>,
+    saved: Option<&[u8]>,
+) -> Result<EngineResources, String> {
     let package = Package::open(read)?;
     let package_identity = package.manifest().identity();
     let mut scene_assets: BTreeMap<_, _> = package
@@ -66,20 +132,21 @@ pub(super) fn scenario(
     let module_sources = package.module_sources()?;
     let read = &|path: &str| package.read_text(path);
 
-    let scenario_document = read_wml(scenario_path, read)?;
+    let scenario_path = selected.process;
+    let scenario_document = read_wml(selected.process, read)?;
     let scenario = one_root(&scenario_document, "scenario")?;
-    let resources = scenario.child("resources")?;
-    let map_document = read_wml(resources.attribute("map")?, read)?;
+    let map_document = read_wml(selected.map, read)?;
     let map = load_map(one_root(&map_document, "map")?)?;
     let (map_tiles, terrain_scripts) =
-        crate::map::load_resources(&map, resources.attribute("map_objects")?, read)?;
+        crate::map::load_resources(&map, selected.map_objects, read)?;
     let terrain_scene = TerrainScene::from_lua(&map, &terrain_scripts)?;
     package_assets.extend(terrain_scene.assets().keys().cloned());
     scene_assets.extend(terrain_scene.assets().clone());
 
-    let catalogs = load_catalogs(resources.attribute("unit_types")?, read)?;
-    let dialogs = load_dialogs(&read_wml(resources.attribute("dialogs")?, read)?)?;
-    validate_rules(&package, resources.attribute("rules")?)?;
+    let catalogs = load_catalog_files(selected.unit_catalogs.iter().copied(), read)?;
+    let dialogs = load_dialogs(&read_wml(selected.dialogs, read)?)?;
+    package.module(selected.game_rules)?;
+    package.module(selected.combat_rules)?;
 
     let seed = parse_i64(scenario, "random_seed")? as u64;
     let mut request = BTreeMap::from([
@@ -93,6 +160,13 @@ pub(super) fn scenario(
             assets_value(&scene_assets, &package.manifest().assets),
         ),
         ("dialogs".into(), dialogs_value(&dialogs)),
+        (
+            "rules".into(),
+            Value::Map(BTreeMap::from([
+                ("game".into(), Value::String(selected.game_rules.into())),
+                ("combat".into(), Value::String(selected.combat_rules.into())),
+            ])),
+        ),
     ]);
     if let Some(campaign) = campaign {
         request.insert(
@@ -107,8 +181,8 @@ pub(super) fn scenario(
     let request = Value::Map(request);
     let world = World {
         map,
-        objects: BTreeMap::new(),
-        state: BTreeMap::new(),
+        entities: BTreeMap::new(),
+        data: BTreeMap::new(),
     };
     let session_id = format!("{}:{scenario_path}", package_identity.package_id);
     let input = SessionInput {
@@ -120,16 +194,15 @@ pub(super) fn scenario(
         modules: module_sources,
         entry,
     };
-    let session = match saved {
-        Some(bytes) => Session::restore_entry(input, bytes)?,
-        None => Session::open(input, request)?,
-    };
-
-    Ok(LoadedScenario {
+    Ok(EngineResources {
         id: scenario.attribute("id")?.into(),
         name: scenario.attribute("name")?.into(),
         start_dialog: scenario.attribute("on_start_dialog")?.into(),
-        session,
+        session: input,
+        initialization: match saved {
+            Some(bytes) => Initialization::Restore(bytes.to_vec()),
+            None => Initialization::New(request),
+        },
         map_tiles,
         terrain_scripts,
         scene_assets,
@@ -137,12 +210,12 @@ pub(super) fn scenario(
     })
 }
 
-fn load_catalogs(
-    paths: &str,
+fn load_catalog_files<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
     read: &impl Fn(&str) -> Result<String, String>,
 ) -> Result<Vec<Value>, String> {
     let mut catalogs = Vec::new();
-    for path in split_paths(paths) {
+    for path in paths {
         for root in &read_wml(path, read)? {
             let mut value = node_properties(root);
             value.insert("__tag".into(), Value::String(root.name.clone()));
@@ -235,15 +308,11 @@ fn dialogs_value(dialogs: &BTreeMap<String, Vec<DialogLine>>) -> Value {
     )
 }
 
-fn validate_rules(package: &Package<'_>, paths: &str) -> Result<(), String> {
-    for path in split_paths(paths) {
-        let module = path
-            .strip_suffix(".lua")
-            .ok_or_else(|| format!("rule module must end with .lua: {path}"))?
-            .replace('/', ".");
-        package.module(&module)?;
-    }
-    Ok(())
+fn lua_path_to_module(path: &str) -> Result<String, String> {
+    Ok(path
+        .strip_suffix(".lua")
+        .ok_or_else(|| format!("rule module must end with .lua: {path}"))?
+        .replace('/', "."))
 }
 
 fn read_wml(

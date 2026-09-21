@@ -2,6 +2,9 @@
     id=return_to_the_village
     width=28
     height=33
+    [tiles]
+        sources=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/bridges.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+    [/tiles]
     data=<<
 Mm^Xm, Mm^Xm, Mm^Xm, Mm^Xm, Mm^Xm, Mm^Xm, Mm^Xm, Hh, Gg, Gg, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gg, Rp, Gg, Gg, Gs^Fds, Gs^Fds, Gs^Fds, Gs^Fds, Gs^Fds, Gs^Fds, Gg, Gs^Fds, Gs^Fds, Gs^Fds
 Mm^Xm, Mm^Xm, Mm^Xm, Mm^Xm, Mm, Mm, Hh^Fms, Hh, Hh^Fms, Gg, Gg, Gs^Fms, Gg, Gs^Fms, Gg^Efm, Rp, Gg, Gg, Gg, Gs^Fds, Gs^Fds, Gs^Fds, Gs^Fds, Gs^Fds, Gg^Efm, Gs^Fds, Gg^Efm, Gs^Fds

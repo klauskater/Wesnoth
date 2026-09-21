@@ -1,8 +1,24 @@
 use wesnoth_engine::{
+    adventure::Adventure,
     engine::{Map, Position},
-    game::Game,
+    game::{self, Game},
     terrain_scene::{TerrainScene, TerrainScript},
 };
+
+fn campaign_game(chapter: usize) -> Game {
+    let manifest = std::fs::read_to_string("scripts/adventures/two_brothers.wml").unwrap();
+    let adventure = Adventure::parse(&manifest).unwrap();
+    Game::start(
+        game::load_adventure_resources(
+            "scripts",
+            &adventure,
+            &adventure.scenarios[chapter],
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
 
 fn scene(map: &Map) -> TerrainScene {
     TerrainScene::from_lua(
@@ -21,13 +37,8 @@ fn scene(map: &Map) -> TerrainScene {
 #[test]
 fn campaign_bridges_load_original_assets() {
     let mut count = 0;
-    for name in [
-        "rooting_out_a_mage",
-        "the_chase",
-        "guarded_castle",
-        "return_to_the_village",
-    ] {
-        let game = Game::load("scripts", &format!("scenarios/{name}.wml")).unwrap();
+    for chapter in 0..4 {
+        let game = campaign_game(chapter);
         let scene = TerrainScene::from_lua(game.map(), game.terrain_scripts()).unwrap();
         for s in scene.ground().iter().filter(|s| s.family == "bridges") {
             assert_eq!(s.local_order, 0);
@@ -44,7 +55,7 @@ fn wooden_bend_has_no_end_caps_between_connected_sections() {
         width: 3,
         height: 2,
         cells: ["Wo^Bw|", "Ww", "Ww", "Ww", "Wo^Bw\\", "Ww^Bw\\"]
-            .map(String::from)
+            .map(Into::into)
             .to_vec(),
     };
     let scene = scene(&map);
@@ -80,7 +91,7 @@ fn all_axes_use_docks_on_water_ramps_on_land_and_no_ramps_on_castles() {
                 height: 5,
                 cells: vec![base.into(); 25],
             };
-            map.cells[12] = format!("Ww^{overlay}");
+            map.cells[12] = format!("Ww^{overlay}").into();
             let scene = scene(&map);
             assert_eq!(scene.ground().len(), if ends.is_empty() { 1 } else { 3 });
             for s in scene
@@ -104,8 +115,8 @@ fn stone_spans_have_one_image_per_join_and_original_sized_ends() {
                 height: 6,
                 cells: vec![base.into(); 36],
             };
-            map.cells[14] = format!("Ww^{overlay}");
-            map.cells[(next.1 - 1) * 6 + next.0 - 1] = format!("Ww^{overlay}");
+            map.cells[14] = format!("Ww^{overlay}").into();
+            map.cells[(next.1 - 1) * 6 + next.0 - 1] = format!("Ww^{overlay}").into();
             let scene = scene(&map);
             assert_eq!(scene.ground().len(), 3, "{overlay} on {base}");
             for s in scene.ground() {

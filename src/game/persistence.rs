@@ -26,7 +26,7 @@ impl Game {
             .map_err(|error| error.message)?;
         let scenario_path = snapshot
             .world
-            .state
+            .data
             .get("session:scenario_path")
             .and_then(Value::as_str)
             .ok_or_else(|| "save has no scenario path".to_owned())?

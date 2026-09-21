@@ -26,6 +26,18 @@ pub enum Value {
     Map(BTreeMap<String, Value>),
 }
 
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
 impl Value {
     #[allow(non_upper_case_globals)]
     pub const Nil: Self = Self::Null;

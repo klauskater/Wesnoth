@@ -1,7 +1,8 @@
-//! Authoritative mutable game data and transactional RNG.
+//! Универсальное авторитетное хранилище игрового мира.
 //!
-//! The store does not interpret game fields or hold UI state. Contract:
-//! `contracts/target/modules/engine/store.md`.
+//! Мир разделён на три независимых адресных пространства: ячейки карты,
+//! сущности и общие данные игры. Хранилище знает только их структуру и не
+//! истолковывает содержащиеся внутри поля.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -12,11 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{hex, value::Value};
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Map {
     pub width: usize,
     pub height: usize,
-    pub cells: Vec<String>,
+    pub cells: Vec<Value>,
 }
 
 impl Map {
@@ -24,7 +25,7 @@ impl Map {
         hex::Bounds::new(self.width, self.height)
     }
 
-    pub fn raw(&self, position: hex::Position) -> Result<&str, String> {
+    pub fn cell(&self, position: hex::Position) -> Result<&Value, String> {
         if !self.bounds()?.contains(position) {
             return Err(format!(
                 "position ({}, {}) is outside the map",
@@ -34,7 +35,6 @@ impl Map {
         let index = (position.y as usize - 1) * self.width + position.x as usize - 1;
         self.cells
             .get(index)
-            .map(String::as_str)
             .ok_or_else(|| "map dimensions do not match its cells".to_owned())
     }
 
@@ -61,16 +61,16 @@ impl Map {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct Object {
+pub struct Entity {
     pub id: String,
-    pub properties: BTreeMap<String, Value>,
+    pub data: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct World {
     pub map: Map,
-    pub objects: BTreeMap<String, Object>,
-    pub state: BTreeMap<String, Value>,
+    pub entities: BTreeMap<String, Entity>,
+    pub data: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,16 +117,16 @@ impl Address {
         Ok(address)
     }
 
-    pub fn object(id: impl Into<String>) -> Self {
+    pub fn entity(id: impl Into<String>) -> Self {
         Self {
-            collection: "objects".into(),
+            collection: "entities".into(),
             id: id.into(),
         }
     }
 
-    pub fn state(id: impl Into<String>) -> Self {
+    pub fn data(id: impl Into<String>) -> Self {
         Self {
-            collection: "state".into(),
+            collection: "data".into(),
             id: id.into(),
         }
     }
@@ -236,21 +236,21 @@ impl Transaction {
         &self.world.map
     }
 
-    pub(crate) fn object(&self, id: &str) -> Option<&Object> {
-        self.world.objects.get(id)
+    pub(crate) fn entity(&self, id: &str) -> Option<&Entity> {
+        self.world.entities.get(id)
     }
 
-    pub(crate) fn objects(&self) -> impl Iterator<Item = &Object> {
-        self.world.objects.values()
+    pub(crate) fn entities(&self) -> impl Iterator<Item = &Entity> {
+        self.world.entities.values()
     }
 
-    pub(crate) fn state(&self, id: &str) -> Option<&Value> {
-        self.world.state.get(id)
+    pub(crate) fn data(&self, id: &str) -> Option<&Value> {
+        self.world.data.get(id)
     }
 
-    pub(crate) fn states(&self) -> impl Iterator<Item = (&str, &Value)> {
+    pub(crate) fn data_entries(&self) -> impl Iterator<Item = (&str, &Value)> {
         self.world
-            .state
+            .data
             .iter()
             .map(|(key, value)| (key.as_str(), value))
     }
@@ -324,10 +324,18 @@ impl Store {
             return Err("map dimensions do not match its cells".into());
         }
         if world
-            .objects
+            .map
+            .cells
             .iter()
-            .any(|(id, object)| id.is_empty() || object.id != *id)
-            || world.state.keys().any(String::is_empty)
+            .any(|cell| !matches!(cell, Value::Map(_)))
+        {
+            return Err("map cells must be records".into());
+        }
+        if world
+            .entities
+            .iter()
+            .any(|(id, entity)| id.is_empty() || entity.id != *id)
+            || world.data.keys().any(String::is_empty)
         {
             return Err("world contains an invalid store id".into());
         }
@@ -413,14 +421,14 @@ impl Store {
 fn read_value(world: &World, address: &Address) -> Result<Option<Value>, String> {
     validate_address(address)?;
     match address.collection.as_str() {
-        "objects" => Ok(world
-            .objects
+        "entities" => Ok(world
+            .entities
             .get(&address.id)
-            .map(|object| Value::Map(object.properties.clone()))),
-        "state" => Ok(world.state.get(&address.id).cloned()),
+            .map(|entity| Value::Map(entity.data.clone()))),
+        "data" => Ok(world.data.get(&address.id).cloned()),
         "map" => {
             let position = parse_map_id(&address.id)?;
-            Ok(Some(Value::String(world.map.raw(position)?.to_owned())))
+            Ok(Some(world.map.cell(position)?.clone()))
         }
         collection => Err(format!("unknown store collection: {collection}")),
     }
@@ -433,17 +441,20 @@ fn read_field<'a>(
 ) -> Result<Option<&'a Value>, String> {
     validate_address(address)?;
     match address.collection.as_str() {
-        "objects" => world
-            .objects
+        "entities" => world
+            .entities
             .get(&address.id)
-            .map(|object| object.properties.get(field))
+            .map(|entity| entity.data.get(field))
             .ok_or_else(|| format!("store record not found: {address:?}")),
-        "state" => match world.state.get(&address.id) {
+        "data" => match world.data.get(&address.id) {
             Some(Value::Map(record)) => Ok(record.get(field)),
             Some(_) => Err(format!("store record is not a map: {address:?}")),
             None => Err(format!("store record not found: {address:?}")),
         },
-        "map" => Err("map cell is not a record".into()),
+        "map" => match world.map.cell(parse_map_id(&address.id)?)? {
+            Value::Map(record) => Ok(record.get(field)),
+            _ => Err(format!("store record is not a map: {address:?}")),
+        },
         collection => Err(format!("unknown store collection: {collection}")),
     }
 }
@@ -493,30 +504,27 @@ fn write_value(
 ) -> Result<(), String> {
     let world = Rc::make_mut(world);
     match address.collection.as_str() {
-        "objects" => {
-            let Value::Map(properties) = value else {
-                return Err("object store values must be maps".into());
+        "entities" => {
+            let Value::Map(data) = value else {
+                return Err("entity store values must be maps".into());
             };
-            world.objects.insert(
+            world.entities.insert(
                 address.id.clone(),
-                Object {
+                Entity {
                     id: address.id.clone(),
-                    properties,
+                    data,
                 },
             );
         }
-        "state" => {
-            world.state.insert(address.id.clone(), value);
+        "data" => {
+            world.data.insert(address.id.clone(), value);
         }
         "map" => {
             if insert {
                 return Err("map cells cannot be inserted".into());
             }
-            let Value::String(value) = value else {
-                return Err("map cell values must be strings".into());
-            };
             let position = parse_map_id(&address.id)?;
-            world.map.raw(position)?;
+            world.map.cell(position)?;
             let index = (position.y as usize - 1) * world.map.width + position.x as usize - 1;
             world.map.cells[index] = value;
         }
@@ -528,11 +536,11 @@ fn write_value(
 fn remove_value(world: &mut Rc<World>, address: &Address) -> Result<(), String> {
     let world = Rc::make_mut(world);
     match address.collection.as_str() {
-        "objects" => {
-            world.objects.remove(&address.id);
+        "entities" => {
+            world.entities.remove(&address.id);
         }
-        "state" => {
-            world.state.remove(&address.id);
+        "data" => {
+            world.data.remove(&address.id);
         }
         "map" => return Err("map cells cannot be removed".into()),
         collection => return Err(format!("unknown store collection: {collection}")),
@@ -548,21 +556,28 @@ fn set_field(
 ) -> Result<(), String> {
     let world = Rc::make_mut(world);
     match address.collection.as_str() {
-        "objects" => {
+        "entities" => {
             world
-                .objects
+                .entities
                 .get_mut(&address.id)
-                .expect("validated object address")
-                .properties
+                .expect("validated entity address")
+                .data
                 .insert(field.to_owned(), value);
         }
-        "state" => {
-            let Value::Map(record) = &mut world.state.get_mut(&address.id).unwrap() else {
+        "data" => {
+            let Value::Map(record) = &mut world.data.get_mut(&address.id).unwrap() else {
                 return Err(format!("store record is not a map: {address:?}"));
             };
             record.insert(field.to_owned(), value);
         }
-        "map" => return Err("map cell is not a record".into()),
+        "map" => {
+            let position = parse_map_id(&address.id)?;
+            let index = (position.y as usize - 1) * world.map.width + position.x as usize - 1;
+            let Value::Map(record) = &mut world.map.cells[index] else {
+                return Err(format!("store record is not a map: {address:?}"));
+            };
+            record.insert(field.to_owned(), value);
+        }
         collection => return Err(format!("unknown store collection: {collection}")),
     }
     Ok(())
@@ -590,16 +605,25 @@ mod tests {
                 map: Map {
                     width: 2,
                     height: 1,
-                    cells: vec!["grassland".into(), "forest".into()],
+                    cells: vec![
+                        Value::Map(BTreeMap::from([(
+                            "terrain".into(),
+                            Value::String("grassland".into()),
+                        )])),
+                        Value::Map(BTreeMap::from([(
+                            "terrain".into(),
+                            Value::String("forest".into()),
+                        )])),
+                    ],
                 },
-                objects: BTreeMap::from([(
+                entities: BTreeMap::from([(
                     "unit".into(),
-                    Object {
+                    Entity {
                         id: "unit".into(),
-                        properties: BTreeMap::from([("hp".into(), Value::Integer(10))]),
+                        data: BTreeMap::from([("hp".into(), Value::Integer(10))]),
                     },
                 )]),
-                state: BTreeMap::from([("turn".into(), Value::Integer(1))]),
+                data: BTreeMap::from([("turn".into(), Value::Integer(1))]),
             },
             42,
         )
@@ -612,15 +636,15 @@ mod tests {
         let mut transaction = store.begin(0).unwrap();
         let operations = [
             Operation::Insert {
-                address: Address::state("temporary"),
+                address: Address::data("temporary"),
                 value: Value::Bool(true),
             },
             Operation::Remove {
-                address: Address::state("missing"),
+                address: Address::data("missing"),
             },
         ];
         assert!(transaction.apply(&operations).is_err());
-        assert_eq!(transaction.get(&Address::state("temporary")).unwrap(), None);
+        assert_eq!(transaction.get(&Address::data("temporary")).unwrap(), None);
         let random = transaction.random(1, 100).unwrap();
         transaction.rollback();
 
@@ -637,19 +661,24 @@ mod tests {
         first
             .apply(&[
                 Operation::SetField {
-                    address: Address::object("unit"),
+                    address: Address::entity("unit"),
                     field: "hp".into(),
                     value: Value::Integer(8),
                 },
                 Operation::Update {
-                    address: Address::state("turn"),
+                    address: Address::data("turn"),
                     value: Value::Integer(2),
+                },
+                Operation::SetField {
+                    address: Address::map(hex::Position { x: 1, y: 1 }),
+                    field: "owner".into(),
+                    value: Value::String("blue".into()),
                 },
             ])
             .unwrap();
         assert_eq!(
             first
-                .get(&Address::object("unit"))
+                .get(&Address::entity("unit"))
                 .unwrap()
                 .unwrap()
                 .get("hp"),
@@ -659,13 +688,17 @@ mod tests {
         assert_eq!(commit.revision, 1);
         assert_eq!(
             commit.changed_addresses,
-            vec![Address::object("unit"), Address::state("turn")]
+            vec![
+                Address::data("turn"),
+                Address::entity("unit"),
+                Address::map(hex::Position { x: 1, y: 1 }),
+            ]
         );
         assert!(store.commit(stale).is_err());
 
         let mut noop = store.begin(1).unwrap();
         noop.apply(&[Operation::Update {
-            address: Address::state("turn"),
+            address: Address::data("turn"),
             value: Value::Integer(2),
         }])
         .unwrap();
@@ -684,18 +717,21 @@ mod tests {
         assert_eq!(
             read.get(&Address::map(hex::Position { x: 2, y: 1 }))
                 .unwrap(),
-            Some(Value::String("forest".into()))
+            Some(Value::Map(BTreeMap::from([(
+                "terrain".into(),
+                Value::String("forest".into()),
+            )])))
         );
         let records = read
             .select(
-                [Address::state("turn"), Address::object("unit")],
+                [Address::data("turn"), Address::entity("unit")],
                 Some(&["hp".into()]),
             )
             .unwrap();
-        assert_eq!(records[0].address, Address::object("unit"));
-        assert_eq!(records[1].address, Address::state("turn"));
+        assert_eq!(records[0].address, Address::data("turn"));
+        assert_eq!(records[1].address, Address::entity("unit"));
         assert_eq!(
-            records[0].value,
+            records[1].value,
             Value::Map(BTreeMap::from([("hp".into(), Value::Integer(10))]))
         );
     }
@@ -708,8 +744,8 @@ mod tests {
                 height: 1,
                 cells: Vec::new(),
             },
-            objects: BTreeMap::new(),
-            state: BTreeMap::new(),
+            entities: BTreeMap::new(),
+            data: BTreeMap::new(),
         };
         assert!(Store::new(world, 1).is_err());
     }

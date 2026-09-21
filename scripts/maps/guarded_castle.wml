@@ -2,6 +2,9 @@
     id=guarded_castle
     width=39
     height=33
+    [tiles]
+        sources=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/bridges.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+    [/tiles]
     data=<<
 Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xu, Xu, Xu, Xu, Xu, Xu, Xu
 Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xu, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xos, Xu, Xu, Xu, Xu, Xu, Xu, Xu

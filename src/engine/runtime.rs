@@ -175,26 +175,39 @@ impl Runtime {
         self.invoke_write(transaction, "dispatch", command)
     }
 
-    pub(crate) fn present(
+    pub(crate) fn tick(
         &self,
         transaction: Transaction,
-        request: Value,
-    ) -> Result<Value, RuntimeError> {
-        self.invoke_read(transaction, "present", request)
+        tick: Value,
+    ) -> Result<(Value, Transaction), RuntimeError> {
+        self.invoke_write(transaction, "tick", tick)
     }
 
-    pub(crate) fn interact(
+    pub(crate) fn write(
         &self,
         transaction: Transaction,
-        request: Value,
-    ) -> Result<Value, RuntimeError> {
-        self.invoke_read(transaction, "interact", request)
+        handler: &str,
+        input: Value,
+    ) -> Result<(Value, Transaction), RuntimeError> {
+        match handler {
+            "initialize" => self.initialize(transaction, input),
+            "dispatch" => self.dispatch(transaction, input),
+            "tick" => self.tick(transaction, input),
+            _ => Err(RuntimeError::Script(format!(
+                "unknown mutating handler: {handler}"
+            ))),
+        }
     }
 
-    pub(crate) fn validate_restored(&self, transaction: Transaction) -> Result<(), RuntimeError> {
-        self.invoke_read(transaction, "validate_restored", Value::Nil)
-            .map(drop)
+    pub(crate) fn read(
+        &self,
+        transaction: Transaction,
+        handler: &str,
+        input: Value,
+    ) -> Result<Value, RuntimeError> {
+        self.invoke_read(transaction, handler, input)
     }
+
 }
 
 struct ActiveGuard(Rc<Cell<bool>>);
@@ -269,15 +282,15 @@ fn create_context(
             )| {
                 ensure_active(&invocation)?;
                 let state = state.borrow();
-                match state.object(&id) {
-                    Some(object) => {
+                match state.entity(&id) {
+                    Some(entity) => {
                         let table = project(
                             lua,
-                            &object.properties,
+                            &entity.data,
                             fields.as_deref(),
                             children.as_deref(),
                         )?;
-                        table.set("id", object.id.as_str())?;
+                        table.set("id", entity.id.as_str())?;
                         Ok(mlua::Value::Table(table))
                     }
                     None => Ok(mlua::Value::Nil),
@@ -297,7 +310,7 @@ fn create_context(
                     state
                         .borrow_mut()
                         .apply(&[Operation::SetField {
-                            address: Address::object(id),
+                            address: Address::entity(id),
                             field: property,
                             value,
                         }])
@@ -320,7 +333,7 @@ fn create_context(
                 state
                     .borrow_mut()
                     .apply(&[Operation::Insert {
-                        address: Address::object(id),
+                        address: Address::entity(id),
                         value: Value::Map(properties),
                     }])
                     .map_err(mlua::Error::runtime)
@@ -335,7 +348,7 @@ fn create_context(
                 state
                     .borrow_mut()
                     .apply(&[Operation::Remove {
-                        address: Address::object(id),
+                        address: Address::entity(id),
                     }])
                     .map_err(mlua::Error::runtime)
             })?,
@@ -349,14 +362,16 @@ fn create_context(
             ensure_active(&invocation)?;
             let state = state.borrow();
             let list = lua.create_table()?;
-            for (index, object) in state.objects().enumerate() {
-                let table = project(lua, &object.properties, fields.as_deref(), children.as_deref())?;
-                table.set("id", object.id.as_str())?;
+            for (index, entity) in state.entities().enumerate() {
+                let table = project(lua, &entity.data, fields.as_deref(), children.as_deref())?;
+                table.set("id", entity.id.as_str())?;
                 list.raw_set(index + 1, table)?;
             }
             Ok(list)
         })?,
     )?;
+    context.set("entities", objects.clone())?;
+    // Временное имя для ещё не перенесённых сценариев приключения.
     context.set("objects", objects)?;
 
     let state_api = lua.create_table()?;
@@ -374,7 +389,7 @@ fn create_context(
             )| {
                 ensure_active(&invocation)?;
                 let state = state.borrow();
-                let Some(value) = state.state(&key) else {
+                let Some(value) = state.data(&key) else {
                     return Ok(mlua::Value::Nil);
                 };
                 if fields.is_some() || children.is_some() {
@@ -401,7 +416,7 @@ fn create_context(
             ensure_active(&invocation)?;
             let state = state.borrow();
             let values = lua.create_table()?;
-            for (key, value) in state.states() {
+            for (key, value) in state.data_entries() {
                 values.set(key, value.to_lua(lua)?)?;
             }
             Ok(values)
@@ -416,7 +431,7 @@ fn create_context(
                 move |_lua, (_self, key, value): (Table, String, mlua::Value)| {
                     ensure_active(&invocation)?;
                     let mut state = state.borrow_mut();
-                    let address = Address::state(key);
+                    let address = Address::data(key);
                     let exists = state.get(&address).map_err(mlua::Error::runtime)?.is_some();
                     let operation = match (value, exists) {
                         (mlua::Value::Nil, false) => return Ok(()),
@@ -435,6 +450,8 @@ fn create_context(
             )?,
         )?;
     }
+    context.set("data", state_api.clone())?;
+    // Временное имя для ещё не перенесённых сценариев приключения.
     context.set("state", state_api)?;
 
     let map = lua.create_table()?;
@@ -471,7 +488,7 @@ fn create_context(
                     ]))
                     .to_lua(lua)?,
                 )?;
-                item.set("value", value.as_str())?;
+                item.set("value", value.to_lua(lua)?)?;
                 cells.raw_set(index + 1, item)?;
             }
             Ok(cells)
@@ -481,14 +498,14 @@ fn create_context(
     let invocation = Rc::clone(&active);
     map.set(
         "get",
-        lua.create_function(move |_lua, (_self, position): (Table, Table)| {
+        lua.create_function(move |lua, (_self, position): (Table, Table)| {
             ensure_active(&invocation)?;
             let position = read_position(&position)?;
             state
                 .borrow()
                 .map()
-                .raw(position)
-                .map(str::to_owned)
+                .cell(position)
+                .and_then(|value| value.to_lua(lua).map_err(|error| error.to_string()))
                 .map_err(mlua::Error::runtime)
         })?,
     )?;
@@ -591,7 +608,7 @@ fn read_position(table: &Table) -> mlua::Result<Position> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{Map, Object};
+    use crate::engine::{Entity, Map};
 
     #[test]
     fn queries_share_world_and_copy_on_write_preserves_rollback_and_random() {
@@ -599,13 +616,13 @@ mod tests {
             map: Map {
                 width: 1,
                 height: 1,
-                cells: vec!["grassland".into()],
+                cells: vec![Value::Map(BTreeMap::new())],
             },
-            objects: BTreeMap::from([(
+            entities: BTreeMap::from([(
                 "unit".into(),
-                Object {
+                Entity {
                     id: "unit".into(),
-                    properties: BTreeMap::from([
+                    data: BTreeMap::from([
                         ("hp".into(), Value::Integer(10)),
                         (
                             "large_unused_data".into(),
@@ -614,7 +631,7 @@ mod tests {
                     ]),
                 },
             )]),
-            state: BTreeMap::new(),
+            data: BTreeMap::new(),
         };
         let (engine, mut store) = Runtime::new(
             world,
@@ -622,21 +639,21 @@ mod tests {
             r#"
             return {
                 read = function(c)
-                    local unit = c.objects:get("unit", {"hp"})
+                    local unit = c.entities:get("unit", {"hp"})
                     assert(unit.large_unused_data == nil)
-                    local all = c.objects:all({"hp"})
+                    local all = c.entities:all({"hp"})
                     assert(all[1].large_unused_data == nil)
                     return unit.hp
                 end,
                 write = function(c, fail)
-                    c.objects:set("unit", "hp", 5)
-                    c.state:set("changed", true)
+                    c.entities:set("unit", "hp", 5)
+                    c.data:set("changed", true)
                     local random = c.random:integer(1, 100000)
                     if fail then error("rollback") end
                     return random
                 end,
                 random = function(c) return c.random:integer(1, 100000) end,
-                retain = function(c) saved_objects = c.objects return true end,
+                retain = function(c) saved_objects = c.entities return true end,
                 use_retained = function() return saved_objects:get("unit") end,
                 spin = function() while true do end end,
             }
@@ -645,7 +662,7 @@ mod tests {
         )
         .unwrap();
         let original = store.world() as *const World;
-        let original_hp = store.world().objects["unit"].properties["hp"].clone();
+        let original_hp = store.world().entities["unit"].data["hp"].clone();
         let (value, transaction) = engine
             .evaluate(
                 store.begin(store.revision()).unwrap(),
@@ -700,10 +717,10 @@ mod tests {
         assert_ne!(original, store.world() as *const World);
         assert_eq!(original_hp, Value::Integer(10));
         assert_eq!(
-            store.world().objects["unit"].properties["hp"],
+            store.world().entities["unit"].data["hp"],
             Value::Integer(5)
         );
-        assert_eq!(store.world().state["changed"], Value::Bool(true));
+        assert_eq!(store.world().data["changed"], Value::Bool(true));
         let (_, transaction) = engine
             .invoke_write(store.begin(store.revision()).unwrap(), "retain", Value::Nil)
             .unwrap();
@@ -735,10 +752,10 @@ mod tests {
             map: Map {
                 width: 1,
                 height: 1,
-                cells: vec!["grassland".into()],
+                cells: vec![Value::Map(BTreeMap::new())],
             },
-            objects: BTreeMap::new(),
-            state: BTreeMap::new(),
+            entities: BTreeMap::new(),
+            data: BTreeMap::new(),
         };
         let (runtime, store) = Runtime::load_entry(
             world(),

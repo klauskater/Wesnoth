@@ -38,7 +38,7 @@ fn grass_covers_sand_sand_covers_roads_and_swamp_covers_water() {
         width: 8,
         height: 1,
         cells: ["Gg", "Ds", "Rp", "Ds", "Gs", "Ss", "Ww", "Sm"]
-            .map(String::from)
+            .map(Into::into)
             .to_vec(),
     };
     let scene = scene(&map);
@@ -129,7 +129,7 @@ fn lilies_use_original_size_layer_and_shore_variants() {
                 height: 5,
                 cells: vec!["Ww".into(); 25],
             };
-            map.cells[12] = format!("Ww^{overlay}");
+            map.cells[12] = format!("Ww^{overlay}").into();
             map.cells[7] = neighbor.into();
             let scene = scene(&map);
             let lilies: Vec<_> = scene

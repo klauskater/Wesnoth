@@ -2,7 +2,7 @@
 //!
 //! Contract: `contracts/target/modules/client/ui.md`.
 
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 use macroquad::prelude::*;
 use wesnoth_engine::engine::protocol::{Action, UiKind, UiNode};
@@ -17,36 +17,17 @@ pub struct Assets {
 }
 
 impl Assets {
-    pub async fn load(registry: &Value, root: &Path) -> Result<Self, String> {
-        if registry.get("schema").and_then(Value::as_str) != Some("assets") {
-            return Err("asset block has an unsupported schema".into());
-        }
-        let Value::List(items) = registry.get("items").ok_or("asset block has no items")? else {
-            return Err("asset items must be a list".into());
-        };
+    pub fn from_memory(
+        registry: &Value,
+        resources: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<Self, String> {
         let mut textures = BTreeMap::new();
-        for item in items {
-            let Some(media_type) = item.get("media_type").and_then(Value::as_str) else {
-                continue;
-            };
-            if !media_type.starts_with("image/") {
-                continue;
-            }
-            let id = item
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or("asset id must be a string")?;
-            let relative = item
-                .get("path")
-                .and_then(Value::as_str)
-                .ok_or("asset path must be a string")?;
-            let path = root.join(relative);
-            let path = path
-                .to_str()
-                .ok_or_else(|| format!("UI asset path is not UTF-8: {}", path.display()))?;
-            let texture = load_texture(path)
-                .await
-                .map_err(|error| format!("cannot load UI asset {id} from {path}: {error}"))?;
+        for (id, media_type, _) in image_assets(registry)? {
+            let bytes = resources
+                .get(id)
+                .ok_or_else(|| format!("UI asset was not loaded: {id}"))?;
+            let format = image_format(media_type);
+            let texture = Texture2D::from_file_with_format(bytes, format);
             if textures.insert(id.to_owned(), texture).is_some() {
                 return Err(format!("duplicate UI asset id: {id}"));
             }
@@ -58,6 +39,42 @@ impl Assets {
         self.textures
             .get(id)
             .ok_or_else(|| format!("UI references unavailable image asset: {id}"))
+    }
+}
+
+fn image_assets(registry: &Value) -> Result<Vec<(&str, &str, &str)>, String> {
+    if registry.get("schema").and_then(Value::as_str) != Some("assets") {
+        return Err("asset block has an unsupported schema".into());
+    }
+    let Value::List(items) = registry.get("items").ok_or("asset block has no items")? else {
+        return Err("asset items must be a list".into());
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let media_type = item.get("media_type").and_then(Value::as_str)?;
+            media_type.starts_with("image/").then_some((item, media_type))
+        })
+        .map(|(item, media_type)| {
+            Ok((
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .ok_or("asset id must be a string")?,
+                media_type,
+                item.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("asset path must be a string")?,
+            ))
+        })
+        .collect()
+}
+
+fn image_format(media_type: &str) -> Option<ImageFormat> {
+    match media_type {
+        "image/png" => Some(ImageFormat::Png),
+        "image/jpeg" => Some(ImageFormat::Jpeg),
+        "image/gif" => Some(ImageFormat::Gif),
+        _ => None,
     }
 }
 

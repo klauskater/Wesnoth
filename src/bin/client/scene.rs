@@ -2,10 +2,9 @@
 //!
 //! Contract: `contracts/target/modules/client/scene.md`.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::path::Path;
 
 use macroquad::prelude::*;
 #[cfg(test)]
@@ -52,7 +51,28 @@ struct Frame {
 }
 
 impl SpriteRenderer {
-    pub async fn load(items: &[SceneItem], registry: &Value, root: &Path) -> Result<Self, String> {
+    pub fn from_memory(
+        items: &[SceneItem],
+        registry: &Value,
+        resources: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<Self, String> {
+        let assets = asset_registry(registry)?;
+        let mut images = BTreeMap::new();
+        for id in wanted_assets(items) {
+            let bytes = resources
+                .get(id)
+                .ok_or_else(|| format!("scene asset was not loaded: {id}"))?;
+            let image = Image::from_file_with_format(bytes, None)
+                .map_err(|error| format!("cannot decode sprite {id}: {error}"))?;
+            if !assets.contains_key(id) {
+                return Err(format!("scene references unknown asset: {id}"));
+            }
+            images.insert(id.clone(), image);
+        }
+        Self::from_images(items, images)
+    }
+
+    fn from_images(items: &[SceneItem], images: BTreeMap<String, Image>) -> Result<Self, String> {
         if let Some(item) = items
             .iter()
             .find(|item| item.layer != "ground" && item.layer != "world")
@@ -62,26 +82,7 @@ impl SpriteRenderer {
                 item.id, item.layer
             ));
         }
-        let assets = asset_registry(registry)?;
         let mut textures = Vec::new();
-        let mut images = BTreeMap::new();
-        let wanted: BTreeSet<_> = items
-            .iter()
-            .flat_map(|item| item.frames.iter().chain(&item.masks))
-            .collect();
-        for id in wanted {
-            let relative = assets
-                .get(id)
-                .ok_or_else(|| format!("scene references unknown asset: {id}"))?;
-            let path = root.join(relative);
-            let path = path
-                .to_str()
-                .ok_or_else(|| format!("sprite path is not UTF-8: {}", path.display()))?;
-            let image = load_image(path)
-                .await
-                .map_err(|error| format!("cannot load sprite {id} from {path}: {error}"))?;
-            images.insert(id.clone(), image);
-        }
         let mut ground = scene_items(items, "ground")?;
         let mut world = scene_items(items, "world")?;
         ground.sort_by_key(|(order, id, _, _)| (*order, id.clone()));
@@ -209,6 +210,13 @@ impl SpriteRenderer {
             });
         }
     }
+}
+
+fn wanted_assets(items: &[SceneItem]) -> BTreeSet<&String> {
+    items
+        .iter()
+        .flat_map(|item| item.frames.iter().chain(&item.masks))
+        .collect()
 }
 
 fn asset_registry(value: &Value) -> Result<BTreeMap<String, String>, String> {
@@ -529,16 +537,21 @@ mod tests {
 
     #[test]
     fn campaign_water_frames_and_masks_can_be_prepared_without_a_gpu() {
-        use wesnoth_engine::game::Game;
+        use wesnoth_engine::{adventure::Adventure, game};
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest = std::fs::read_to_string(root.join("scripts/adventures/two_brothers.wml"))
+            .unwrap();
+        let adventure = Adventure::parse(&manifest).unwrap();
         let mut checked = std::collections::BTreeSet::new();
-        for scenario in [
-            "scenarios/rooting_out_a_mage.wml",
-            "scenarios/the_chase.wml",
-            "scenarios/guarded_castle.wml",
-            "scenarios/return_to_the_village.wml",
-        ] {
-            let game = Game::load(root.join("scripts"), scenario).unwrap();
+        for chapter in &adventure.scenarios {
+            let resources = game::load_adventure_resources(
+                root.join("scripts"),
+                &adventure,
+                chapter,
+                None,
+            )
+            .unwrap();
+            let game = game::Game::start(resources).unwrap();
             let scene = TerrainScene::from_lua(game.map(), game.terrain_scripts()).unwrap();
             let images: BTreeMap<_, _> = scene
                 .assets()

@@ -59,6 +59,7 @@ mod tests {
 
     use super::*;
     use crate::engine::store::{Map, Store, World};
+    use crate::value::Value;
 
     fn identity(version: &str) -> PackageIdentity {
         PackageIdentity {
@@ -75,10 +76,10 @@ mod tests {
                 map: Map {
                     width: 1,
                     height: 1,
-                    cells: vec!["Gg".into()],
+                    cells: vec![Value::Map(BTreeMap::new())],
                 },
-                objects: BTreeMap::new(),
-                state: BTreeMap::new(),
+                entities: BTreeMap::new(),
+                data: BTreeMap::new(),
             },
             7,
         )

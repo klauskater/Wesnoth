@@ -1,7 +1,8 @@
 //! Map resource loading, independent of scenario orchestration.
 use crate::{
-    engine::Map,
+    engine::{Map, Position},
     terrain_scene::TerrainScript,
+    value::Value,
     wml::{self, Node},
 };
 use std::collections::BTreeMap;
@@ -51,8 +52,28 @@ pub fn load_map(node: &Node) -> Result<Map, String> {
     Ok(Map {
         width,
         height,
-        cells: rows.into_iter().flatten().collect(),
+        cells: rows
+            .into_iter()
+            .flatten()
+            .map(|terrain| Value::Map(BTreeMap::from([("terrain".into(), Value::String(terrain))])))
+            .collect(),
     })
+}
+
+/// Возвращает код рельефа из данных ячейки текущего формата приключений.
+///
+/// Этот метод намеренно находится в загрузчике карты, а не в хранилище движка:
+/// поле `terrain` является соглашением ресурсов игры, неизвестным `Store`.
+impl Map {
+    pub fn raw(&self, position: Position) -> Result<&str, String> {
+        terrain_code(self.cell(position)?)
+    }
+}
+
+pub fn terrain_code(cell: &Value) -> Result<&str, String> {
+    cell.as_str()
+        .or_else(|| cell.get("terrain").and_then(Value::as_str))
+        .ok_or_else(|| "map cell has no string terrain field".to_owned())
 }
 
 fn parse_color(value: &str) -> Result<[u8; 3], String> {
@@ -111,8 +132,9 @@ pub fn load_resources(
         }
     }
     for cell in &map.cells {
-        if map_tiles.get(cell).is_none() {
-            return Err(format!("map uses unknown map object: {cell}"));
+        let terrain = terrain_code(cell)?;
+        if map_tiles.get(terrain).is_none() {
+            return Err(format!("map uses unknown map object: {terrain}"));
         }
     }
 

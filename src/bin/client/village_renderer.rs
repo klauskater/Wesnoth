@@ -229,22 +229,28 @@ fn recolor_flag(image: &mut Image, color: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::path::Path;
-    use wesnoth_engine::game::Game;
+    use wesnoth_engine::{
+        adventure::Adventure,
+        game::{self, Game},
+    };
 
     #[test]
     fn campaign_villages_and_flags_have_decodable_art() {
-        for name in [
-            "rooting_out_a_mage",
-            "the_chase",
-            "guarded_castle",
-            "return_to_the_village",
-        ] {
-            let mut game = Game::load(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"),
-                &format!("scenarios/{name}.wml"),
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest = std::fs::read_to_string(root.join("scripts/adventures/two_brothers.wml"))
+            .unwrap();
+        let adventure = Adventure::parse(&manifest).unwrap();
+        for chapter in &adventure.scenarios {
+            let resources = game::load_adventure_resources(
+                root.join("scripts"),
+                &adventure,
+                chapter,
+                None,
             )
             .unwrap();
-            for code in &game.map().cells {
+            let mut game = Game::start(resources).unwrap();
+            for cell in &game.map().cells {
+                let code = wesnoth_engine::map::terrain_code(cell).unwrap();
                 if gameplay_type(code) != "village" {
                     continue;
                 }

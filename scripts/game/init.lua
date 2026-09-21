@@ -1,26 +1,31 @@
 -- Package entry. Contract: contracts/target/modules/lua/entry.md
 local bootstrap = require("game.bootstrap")
 local campaign = require("game.campaign")
-local rules = require("rules.basic_combat")
 local terrain = require("game.rules.terrain")
-local combat = require("game.rules.combat")
 local interaction = require("game.presentation.interaction")
 local presenter = require("game.presentation.presenter")
 
 local entry = {}
-local function prepare(context)
+local function prepare(context, selected)
+    selected = selected or {
+        game = assert(context.state:get("session:game_rules"), "missing game rules"),
+        combat = assert(context.state:get("session:combat_rules"), "missing combat rules"),
+    }
     terrain.install(context)
-    context.combat = combat
-    return context
+    context.combat = require(selected.combat)
+    return context, require(selected.game)
 end
 
 function entry.initialize(context, request)
-    prepare(context)
+    local selected = assert(request.rules, "initialization requires rules")
+    context.state:set("session:game_rules", assert(selected.game, "missing game rules"))
+    context.state:set("session:combat_rules", assert(selected.combat, "missing combat rules"))
+    local _, rules = prepare(context, selected)
     return rules.initialize(context, bootstrap.create_scenario(context, request))
 end
 
 function entry.dispatch(context, command)
-    prepare(context)
+    local _, rules = prepare(context)
     local action = assert(command.action, "dispatch requires action")
     local pending_dialog = context.state:get("pending_dialog")
     if action == "dismiss_dialog" then
@@ -41,8 +46,17 @@ function entry.dispatch(context, command)
     return result
 end
 
-function entry.interact(context, request)
+-- Обработчик игрового времени. Сейчас правила пошаговые и не меняют мир от
+-- течения времени, поэтому тик является явной пустой операцией. Когда появятся
+-- временные правила, они будут подключаться здесь, а не в окне или интерфейсе.
+function entry.tick(context, tick)
     prepare(context)
+    assert(type(tick.elapsed_ms) == "number", "tick requires elapsed_ms")
+    return wesnoth.value.list()
+end
+
+function entry.interact(context, request)
+    local _, rules = prepare(context)
     local result = interaction.interpret(context, request)
     local query = result.view_context.query
     if query then
@@ -62,7 +76,7 @@ function entry.present(context, request)
 end
 
 function entry.validate_restored(context)
-    prepare(context)
+    local _, rules = prepare(context)
     bootstrap.validate_restored(context)
     rules.status(context)
     rules.snapshot(context)

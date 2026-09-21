@@ -356,14 +356,15 @@ fn map_table(lua: &Lua, map: &Map, codes: &[String]) -> mlua::Result<Table> {
     for y in 1..=map.height {
         let row = lua.create_table()?;
         for x in 1..=map.width {
-            let code = &map.cells[(y - 1) * map.width + x - 1];
-            row.set(x, code.as_str())?;
+            let cell = &map.cells[(y - 1) * map.width + x - 1];
+            let code = crate::map::terrain_code(cell).map_err(mlua::Error::runtime)?;
+            row.set(x, code)?;
             let (base, overlay) = visual_codes(code);
             if let Some(terrain) = matching_code(codes, base, overlay) {
                 let tile = lua.create_table()?;
                 tile.set("x", x)?;
                 tile.set("y", y)?;
-                tile.set("code", code.as_str())?;
+                tile.set("code", code)?;
                 tile.set("terrain", terrain)?;
                 tiles.set(family_index, tile)?;
                 family_index += 1;
@@ -733,7 +734,7 @@ mod tests {
                 &Map {
                     width: 3,
                     height: 3,
-                    cells,
+                    cells: cells.into_iter().map(Into::into).collect(),
                 },
                 &[TerrainScript {
                     family: "forest".into(),

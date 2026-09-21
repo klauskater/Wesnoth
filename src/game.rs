@@ -1,10 +1,31 @@
+//! Публичная граница жизненного цикла игрового движка.
+//!
+//! Движок принимает смысловые игровые события (`Command` и `Interaction`) и
+//! возвращает сообщения или снимки, описывающие изменения игрового мира. Движок
+//! не знает, в какую координату экрана нажал игрок, как рисуется кнопка и как
+//! проигрывается анимация. Преобразование физического ввода в игровые события и
+//! отображение результата движка — обязанности интерфейса клиента.
+//!
+//! Запуск игры намеренно разделён на два этапа:
+//!
+//! 1. [`load_resources`] или [`load_resources_from`] разбирает выбранный сценарий
+//!    и создаёт ещё не запущенный пакет [`EngineResources`].
+//! 2. [`Game::start`] принимает этот пакет и создаёт новую либо восстанавливает
+//!    сохранённую сессию движка.
+//!
+//! Благодаря этому менеджер ресурсов клиента может подготовить все данные до
+//! запуска движка и интерфейса. Методы `Game::load*` ниже оставлены для тестов и
+//! старого кода. Новый клиент должен запускать игру через отдельный загрузчик
+//! ресурсов.
+
 use std::{collections::BTreeMap, path::Path};
 
 use crate::{
+    adventure::{Adventure, AdventureScenario},
     engine::{
         Map,
         protocol::{Command, Interaction},
-        session::{Dispatch, InteractionDelivery, Session},
+        session::{Dispatch, InteractionDelivery, Session, SessionInput},
     },
     map::MapTiles,
     terrain_scene::TerrainScript,
@@ -18,6 +39,92 @@ mod persistence;
 pub use campaign::CampaignState;
 pub use compat::{DialogLine, GameSnapshot};
 
+/// Полностью подготовленный, но ещё не запущенный контекст движка для сценария.
+///
+/// Снаружи этого модуля содержимое намеренно скрыто. Загрузчик может разобрать
+/// файлы и собрать правила, карту и начальное состояние, но только
+/// [`Game::start`] превращает эти данные в работающую [`Session`]. Поэтому окно
+/// или интерфейс не могут случайно собрать движок лишь наполовину.
+pub struct EngineResources {
+    id: String,
+    name: String,
+    start_dialog: String,
+    session: SessionInput,
+    initialization: Initialization,
+    map_tiles: MapTiles,
+    terrain_scripts: Vec<TerrainScript>,
+    scene_assets: BTreeMap<String, String>,
+    dialogs: BTreeMap<String, Vec<DialogLine>>,
+}
+
+/// Определяет, как нужно запустить подготовленную сессию.
+///
+/// Оба варианта используют одинаково загруженные правила и сценарий. Разница
+/// только в том, получит ли сессия начальный запрос новой игры или восстановит
+/// ранее сохранённое состояние движка.
+enum Initialization {
+    New(crate::value::Value),
+    Restore(Vec<u8>),
+}
+
+/// Загружает часть сценария, необходимую движку, из каталога скриптов.
+///
+/// Игровой цикл здесь не запускается. Возвращённый пакет можно объединить с
+/// отдельно подготовленным контекстом интерфейса, а затем передать в
+/// [`Game::start`].
+pub fn load_resources(
+    scripts: impl AsRef<Path>,
+    scenario_path: &str,
+    campaign: Option<&CampaignState>,
+) -> Result<EngineResources, String> {
+    let read = load::filesystem(scripts)?;
+    load_resources_from(scenario_path, campaign, &read)
+}
+
+/// Вариант [`load_resources`], не привязанный к файловой системе.
+///
+/// Компьютерный клиент, мобильная сборка, тесты или другое хранилище передают
+/// способ чтения через `read`. Сам порядок инициализации движка не меняется.
+pub fn load_resources_from(
+    scenario_path: &str,
+    campaign: Option<&CampaignState>,
+    read: &impl Fn(&str) -> Result<String, String>,
+) -> Result<EngineResources, String> {
+    load::scenario(scenario_path, campaign, read, None)
+}
+
+/// Загружает главу через корневой манифест приключения.
+///
+/// Именно этот путь должен использовать клиент: приключение выбирает правила и
+/// доступные типы юнитов, глава выбирает процесс, карту и диалоги, а карта —
+/// определения своих тайлов.
+pub fn load_adventure_resources(
+    scripts: impl AsRef<Path>,
+    adventure: &Adventure,
+    chapter: &AdventureScenario,
+    campaign: Option<&CampaignState>,
+) -> Result<EngineResources, String> {
+    let read = load::filesystem(scripts)?;
+    load_adventure_resources_from(adventure, chapter, campaign, &read)
+}
+
+/// Вариант [`load_adventure_resources`] для встроенного или иного хранилища.
+pub fn load_adventure_resources_from(
+    adventure: &Adventure,
+    chapter: &AdventureScenario,
+    campaign: Option<&CampaignState>,
+    read: &impl Fn(&str) -> Result<String, String>,
+) -> Result<EngineResources, String> {
+    load::adventure(adventure, chapter, campaign, read, None)
+}
+
+/// Запущенный экземпляр игрового движка.
+///
+/// `Game` через свою сессию владеет единственным истинным изменяемым состоянием
+/// мира. Внешний код передаёт смысловые игровые действия через
+/// [`Game::dispatch_command`] или [`Game::interact`] и при необходимости
+/// запрашивает полный снимок для конкретного наблюдателя. Состояние отрисовки
+/// здесь храниться не должно.
 pub struct Game {
     pub id: String,
     pub name: String,
@@ -31,6 +138,48 @@ pub struct Game {
 }
 
 impl Game {
+    /// Запускает ранее подготовленный контекст движка.
+    ///
+    /// Это единственный переход от загруженных ресурсов к работающей сессии.
+    /// Метод либо открывает сценарий с его начальным запросом, либо восстанавливает
+    /// сохранённое состояние, после чего оставляет у движка все невизуальные
+    /// данные, необходимые для описания мира клиенту.
+    pub fn start(resources: EngineResources) -> Result<Self, String> {
+        let EngineResources {
+            id,
+            name,
+            start_dialog,
+            session,
+            initialization,
+            map_tiles,
+            terrain_scripts,
+            scene_assets,
+            dialogs,
+        } = resources;
+        let session = match initialization {
+            Initialization::New(request) => Session::open(session, request)?,
+            Initialization::Restore(bytes) => Session::restore_entry(session, &bytes)?,
+        };
+        Ok(Self {
+            id,
+            name,
+            start_dialog,
+            session,
+            map_tiles,
+            terrain_scripts,
+            scene_assets,
+            dialogs,
+            compat: compat::State::default(),
+        })
+    }
+
+    // Временный слой совместимости загрузки ----------------------------------------
+    //
+    // Эти методы сохраняют старый одношаговый API для тестов, сохранений и ещё не
+    // перенесённого кода. Внутри они всё равно используют единый путь
+    // `EngineResources -> Game::start`. Графический клиент через них игру не
+    // запускает.
+
     pub fn load(scripts: impl AsRef<Path>, scenario_path: &str) -> Result<Self, String> {
         Self::load_with_campaign(scripts, scenario_path, None)
     }
@@ -65,21 +214,14 @@ impl Game {
         read: &impl Fn(&str) -> Result<String, String>,
         saved: Option<&[u8]>,
     ) -> Result<Self, String> {
-        let loaded = load::scenario(scenario_path, campaign, read, saved)?;
-
-        Ok(Self {
-            id: loaded.id,
-            name: loaded.name,
-            start_dialog: loaded.start_dialog,
-            session: loaded.session,
-            map_tiles: loaded.map_tiles,
-            terrain_scripts: loaded.terrain_scripts,
-            scene_assets: loaded.scene_assets,
-            dialogs: loaded.dialogs,
-            compat: compat::State::default(),
-        })
+        Self::start(load::scenario(scenario_path, campaign, read, saved)?)
     }
 
+    /// Создаёт полное описание текущего мира для конкретного наблюдателя.
+    ///
+    /// Это данные на выходе движка, а не готовая картинка интерфейса. Клиент сам
+    /// решает, как превратить блоки протокола в элементы интерфейса, спрайты,
+    /// слои и анимации.
     pub fn view_snapshot(
         &mut self,
         viewer: &str,
@@ -87,14 +229,22 @@ impl Game {
         self.session.snapshot(viewer)
     }
 
+    /// Выполняет смысловую игровую команду и возвращает вызванные ею сообщения.
+    /// Координаты экрана и сырые события мыши или клавиатуры интерфейс обязан
+    /// преобразовать до вызова этого метода.
     pub fn dispatch_command(&mut self, viewer: &str, command: Command) -> Dispatch {
         self.session.dispatch(viewer, command)
     }
 
+    /// Продолжает взаимодействие, которое запросил движок, например выбор варианта.
+    /// Движок проверяет и обрабатывает выбор. Интерфейс только показывает варианты
+    /// и сообщает выбранное смысловое значение.
     pub fn interact(&mut self, viewer: &str, interaction: Interaction) -> InteractionDelivery {
         self.session.interact(viewer, interaction)
     }
 
+    // Методы только для чтения описания мира. Они отдают логические данные карты
+    // и сцены, необходимые для контекста клиента, но не объекты отрисовки.
     pub fn map(&self) -> &Map {
         &self.session.world().map
     }
@@ -210,7 +360,7 @@ mod tests {
     fn load_save_rejects_invalid_restored_state() {
         let game = Game::load(scripts(), "scenarios/first_battle.wml").unwrap();
         let mut save: serde_json::Value = serde_json::from_str(&game.save().unwrap()).unwrap();
-        save["store"]["world"]["state"]
+        save["store"]["world"]["data"]
             .as_object_mut()
             .unwrap()
             .remove("scenario");

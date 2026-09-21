@@ -310,7 +310,7 @@ fn read_map(path: &PathBuf) -> Result<Map, String> {
         return Ok(Map {
             width,
             height: rows.len(),
-            cells: rows.into_iter().flatten().collect(),
+            cells: rows.into_iter().flatten().map(Into::into).collect(),
         });
     }
     let document = wml::parse(&source)?;

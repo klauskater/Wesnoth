@@ -2,6 +2,9 @@
     id=rooting_out_a_mage
     width=40
     height=32
+    [tiles]
+        sources=map_objects/road.wml,map_objects/dirt.wml,map_objects/grassland.wml,map_objects/decorations.wml,map_objects/bridges.wml,map_objects/forest.wml,map_objects/hills.wml,map_objects/water.wml,map_objects/castle.wml,map_objects/keep.wml,map_objects/village.wml
+    [/tiles]
     data=<<
 Gs^Fms, Gs^Fms, Gll^Fp, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gs^Fms, Gd^Fms, Gs^Fms, Gd^Fms, Gs, Gs, Rp, Gs, Gs, Gs, Gs^Fms, Gs^Fms, Gs^Fms, Gd^Fms, Gs, Gs, Gs^Fds, Gs^Fds, Gs^Fds, Gs^Fms, Gs^Fds, Gs^Fms, Gs^Fds, Gs^Fds, Ww, Hh, Hh, Mm, Mm
 Gll^Fp, Gll^Fp, Gll^Fp, Gll^Fp, Gll^Fp, Gll^Fp, Gll^Fp, Gs^Vh, Gs^Fms, Gs^Fms, Gs, Gd^Fms, Gs, Gd^Fms, Gs^Fms, Gs, Chr, Rp, Rp, Gs, Gs, Gs^Fms, Gd, Gd^Fms, Gs^Fms, Gd^Fms, Gs, Gs^Fds, Gs^Eff, Gs^Fms, Re^Gvs, Gs^Fms, Gs^Fms, Gs^Fds, Gs^Fds, Ww, Gs^Fds, Hh, Hh, Mm
