@@ -3,6 +3,30 @@
 //! Этот модуль пока сохраняет доставку команд, состояние наблюдателей и старый
 //! протокол представления. Авторитетным миром и выполнением изменяющих скриптов
 //! он больше не владеет: эти обязанности находятся в `Engine`.
+//!
+//! Место `Session` в цепочке вызовов:
+//!
+//! ```text
+//! клиент/UI
+//!    │ Command / Interaction / запрос снимка
+//!    ▼
+//! Session ── проверка протокола, ревизий и повторных запросов
+//!    │
+//!    ├── Engine::user_event(...) ── изменяет игровой мир через Lua
+//!    │
+//!    └── Engine::read_script(...) ── только читает мир и строит представление
+//! ```
+//!
+//! Поэтому здесь существуют две независимые ревизии:
+//!
+//! - `world_revision` принадлежит движку и меняется после успешной игровой
+//!   команды;
+//! - `view_revision` принадлежит конкретному наблюдателю и меняется, когда его
+//!   набор блоков интерфейса или эффектов действительно обновился.
+//!
+//! Сессия также делает повторную доставку безопасной. Если транспорт дважды
+//! прислал одну команду с тем же идентификатором, второй раз Lua не запускается:
+//! клиент получает сохранённый результат первого выполнения.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,15 +43,30 @@ use super::{
 };
 
 #[derive(Clone, Debug, PartialEq)]
+/// Полный результат доставки одной смысловой игровой команды.
+///
+/// Команда и построение представления разделены намеренно. Игровое изменение
+/// может успешно попасть в мир, даже если последующий скрипт представления
+/// завершился ошибкой. В этом случае `result` остаётся `Committed`, изменения
+/// нельзя повторять, а ошибка возвращается отдельно в `presentation_error`.
 pub struct Dispatch {
+    /// Подтверждение либо отклонение команды для транспортного протокола.
     pub result: CommandResult,
+    /// Смысловые события, которые вернул игровой Lua-скрипт.
     pub events: Option<Value>,
+    /// Зафиксированные движком изменения мира и их новая ревизия.
     pub changes: Option<Commit>,
+    /// Инкрементальное изменение представления именно этого наблюдателя.
     pub view: Option<ViewUpdate>,
+    /// Ошибка построения представления после уже совершённой команды.
     pub presentation_error: Option<Error>,
 }
 
 #[derive(Clone)]
+/// Запись для идемпотентной повторной доставки команды.
+///
+/// Одного `command_id` недостаточно: при повторе проверяются также наблюдатель и
+/// всё содержимое команды. Повтор с другим содержимым считается конфликтом.
 struct CachedCommand {
     viewer: String,
     command: Command,
@@ -35,6 +74,11 @@ struct CachedCommand {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Результат обработки локального действия интерфейса.
+///
+/// Взаимодействие может изменить только представление (`view`) либо породить
+/// настоящую игровую команду (`command`). Само по себе нажатие на ячейку или
+/// кнопку не получает права напрямую изменять мир.
 pub struct InteractionDelivery {
     pub interaction_id: String,
     pub view: Option<ViewUpdate>,
@@ -43,6 +87,7 @@ pub struct InteractionDelivery {
 }
 
 #[derive(Clone)]
+/// Кэш уже обработанного UI-взаимодействия, аналогичный `CachedCommand`.
 struct CachedInteraction {
     viewer: String,
     interaction: Interaction,
@@ -50,35 +95,73 @@ struct CachedInteraction {
 }
 
 #[derive(Default)]
+/// Персональное состояние представления одного наблюдателя.
+///
+/// Оно не является частью игрового мира и не сохраняется в save-файл. Здесь
+/// допустимы выбранная клетка, открытая панель и другие локальные детали UI.
 struct Viewer {
+    /// Версия последнего представления, которое получил этот наблюдатель.
     revision: u64,
+    /// Непрозрачная для Rust память Lua-слоя взаимодействия.
     context: Option<Value>,
+    /// Последнее полное содержимое блоков представления по их стабильным ID.
     blocks: BTreeMap<String, Value>,
 }
 
+/// Протокольная оболочка одной запущенной игры.
+///
+/// `Session` владеет движком, но не реализует игровые правила. Она отвечает за
+/// жизненный цикл экземпляра, согласование ревизий, дедупликацию доставки и
+/// персональные представления клиентов.
 pub struct Session {
+    /// Текущий ID экземпляра. После восстановления получает суффикс поколения.
     id: String,
+    /// Исходный ID, относительно которого формируются ID новых поколений.
     root_id: String,
+    /// Сколько успешных восстановлений состояния пережил этот объект сессии.
     generation: u64,
+    /// Идентичность пакета нужна для проверки совместимости сохранений.
     package: PackageIdentity,
+    /// Разрешённые пакетом ID ресурсов для проверки ответов представления.
     assets: BTreeSet<String>,
+    /// Единственный владелец авторитетного игрового мира и Lua runtime.
     engine: Engine,
+    /// Завершённые команды по `command_id` для защиты от повторного исполнения.
     commands: BTreeMap<String, CachedCommand>,
+    /// Независимое состояние представления каждого подключённого наблюдателя.
     viewers: BTreeMap<String, Viewer>,
+    /// Завершённые UI-взаимодействия по `interaction_id`.
     interactions: BTreeMap<String, CachedInteraction>,
 }
 
+/// Уже загруженные ресурсы, из которых можно создать сессию.
+///
+/// Загрузчик ресурсов формирует эту структуру до запуска игры. Благодаря этому
+/// `Session` не читает файлы и не решает, какое приключение или правила выбрать.
 pub(crate) struct SessionInput {
+    /// Стабильный ID новой сессии, обычно пакет плюс путь процесса главы.
     pub id: String,
+    /// Версия пакета и протокола, с которыми создан мир.
     pub package: PackageIdentity,
+    /// Белый список доступных представлению ресурсов.
     pub assets: BTreeSet<String>,
+    /// Начальная карта и пустые либо восстановленные хранилища мира.
     pub world: World,
+    /// Начальное состояние детерминированного генератора случайных чисел.
     pub seed: u64,
+    /// Полный набор уже прочитанных Lua-модулей пакета.
     pub modules: BTreeMap<String, String>,
+    /// Имя корневого Lua-модуля с `initialize`, `dispatch`, `present` и т. д.
     pub entry: String,
 }
 
 impl Session {
+    /// Создаёт оболочку сессии и загружает Lua entrypoint, но ещё не запускает
+    /// инициализацию новой игры и не восстанавливает сохранение.
+    ///
+    /// Это общий нижний этап для [`Session::open`] и
+    /// [`Session::restore_entry`]. На выходе движок уже способен выполнять
+    /// скрипты, однако переданный мир ещё не считается начатой игровой сессией.
     fn load_entry(input: SessionInput) -> Result<Self, String> {
         let SessionInput {
             id,
@@ -89,9 +172,13 @@ impl Session {
             modules,
             entry,
         } = input;
+        // ID участвует в дедупликации и именовании поколений, поэтому без него
+        // невозможно однозначно идентифицировать экземпляр игры.
         if id.is_empty() {
             return Err("session id must not be empty".into());
         }
+        // Lua-пакет и Rust-клиент обязаны одинаково понимать структуры Command,
+        // ViewUpdate и остальные сообщения протокола.
         if package.protocol_version != protocol::PROTOCOL_VERSION {
             return Err(format!(
                 "incompatible package protocol: {} (expected {})",
@@ -99,6 +186,8 @@ impl Session {
                 protocol::PROTOCOL_VERSION
             ));
         }
+        // Здесь создаётся Runtime и загружается корневой Lua-модуль. Ни один
+        // изменяющий игровой обработчик на этом шаге ещё не вызывается.
         let engine = Engine::load(world, seed, modules, &entry)?;
         Ok(Self {
             root_id: id.clone(),
@@ -113,49 +202,74 @@ impl Session {
         })
     }
 
+    /// Открывает новую игру.
+    ///
+    /// Сначала создаётся пустая сессия с загруженным Lua-кодом, затем `request`
+    /// один раз передаётся в `entry.initialize`. Именно инициализация наполняет
+    /// хранилища сущностями и общеигровыми данными.
     pub(crate) fn open(input: SessionInput, request: Value) -> Result<Self, String> {
         let mut session = Self::load_entry(input)?;
         session.initialize(request)?;
         Ok(session)
     }
 
+    /// Создаёт runtime из актуальных ресурсов и помещает в него сохранённый мир.
+    ///
+    /// Lua-код никогда не берётся из save-файла: он загружается из `input`, а
+    /// сохранение содержит только данные мира, RNG и ревизию. После установки
+    /// снимка движок вызывает проверку восстановленного состояния.
     pub(crate) fn restore_entry(input: SessionInput, bytes: &[u8]) -> Result<Self, String> {
         let mut session = Self::load_entry(input)?;
         session.restore(bytes).map_err(|error| error.message)?;
         Ok(session)
     }
 
+    /// Возвращает ID именно текущего поколения сессии.
     pub fn id(&self) -> &str {
         &self.id
     }
 
+    /// Даёт внутреннему игровому фасаду доступ к миру только для чтения.
     pub(crate) fn world(&self) -> &World {
         self.engine.world()
     }
 
+    /// Текущая авторитетная ревизия игрового мира.
     pub fn world_revision(&self) -> u64 {
         self.engine.revision()
     }
 
+    /// Кодирует авторитетный снимок движка вместе с идентичностью пакета.
+    /// Локальные состояния UI и кэши доставки намеренно не сохраняются.
     pub fn save(&self) -> Result<Vec<u8>, Error> {
         persistence::encode(self.package.clone(), self.engine.snapshot())
     }
 
+    /// Восстанавливает состояние в уже существующий объект сессии.
+    /// Совместимость пакета проверяется до изменения текущего мира.
     pub fn restore(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let snapshot = persistence::decode(bytes, &self.package)?;
         self.restore_store(snapshot)
     }
 
+    /// Единственный вызов Lua-инициализации новой игры со стороны сессии.
     fn initialize(&mut self, request: Value) -> Result<Value, String> {
         self.engine
             .initialize(request)
             .map_err(|error| error.message)
     }
 
+    /// Строит полный снимок представления для одного наблюдателя.
+    ///
+    /// `snapshot` не изменяет игровой мир. Lua-функция `present` читает мир и
+    /// возвращает операции над именованными блоками. Сессия применяет их к ранее
+    /// известному состоянию наблюдателя и отдаёт уже собранный полный набор.
     pub fn snapshot(&mut self, viewer: &str) -> Result<ViewSnapshot, String> {
         if viewer.is_empty() {
             return Err("viewer id must not be empty".into());
         }
+        // Новый наблюдатель начинает с пустого UI-контекста. Для существующего
+        // передаём контекст, который ранее вернул скрипт `interact`.
         let context = self
             .viewers
             .get(viewer)
@@ -167,12 +281,16 @@ impl Session {
             ("events".into(), Value::List(Vec::new())),
             ("command_id".into(), Value::String("snapshot".into())),
         ]));
+        // `read_script` гарантирует режим только для чтения: `present` не может
+        // легально изменить карту, сущности, общие данные или RNG.
         let presentation = parse_presentation(
             self.engine
                 .read_script("present", request)
                 .map_err(|error| error.message)?,
         )?;
         let state = self.viewers.entry(viewer.into()).or_default();
+        // Lua возвращает патч, но полный снимок требует применить этот патч к
+        // последнему известному набору блоков наблюдателя.
         let mut blocks = state.blocks.clone();
         for id in presentation.remove_ids {
             blocks.remove(&id);
@@ -180,6 +298,7 @@ impl Session {
         for block in presentation.replace_blocks {
             blocks.insert(block.id, block.content);
         }
+        // Повторный снимок с тем же содержимым не увеличивает view_revision.
         if blocks != state.blocks {
             state.revision = state
                 .revision
@@ -199,11 +318,19 @@ impl Session {
                 })
                 .collect(),
         };
+        // Скрипт представления не может сослаться на ресурс, которого не было в
+        // подготовленном пакете сессии.
         protocol::validate_assets(&Message::ViewSnapshot(snapshot.clone()), &self.assets)
             .map_err(|error| error.message)?;
         Ok(snapshot)
     }
 
+    /// Проверяет и выполняет одну смысловую игровую команду.
+    ///
+    /// Порядок проверок принципиален: сначала обрабатывается точный повтор уже
+    /// выполненной команды, затем проверяется форма сообщения и только потом —
+    /// ожидаемая ревизия мира. Поэтому потерянный сетевой ответ можно запросить
+    /// повторно даже после того, как первая доставка уже увеличила ревизию.
     pub fn dispatch(&mut self, viewer: &str, command: Command) -> Dispatch {
         if viewer.is_empty() {
             return rejected(
@@ -213,6 +340,8 @@ impl Session {
                 "viewer id must not be empty",
             );
         }
+        // Идемпотентный повтор возвращает прежний ответ. Повторное использование
+        // ID другим клиентом или с другим телом команды является конфликтом.
         if let Some(cached) = self.commands.get(&command.command_id) {
             return if cached.viewer == viewer && cached.command == command {
                 cached.dispatch.clone()
@@ -226,6 +355,8 @@ impl Session {
             };
         }
 
+        // Здесь проверяются обязательные поля и общие ограничения протокола до
+        // того, как недоверенные данные попадут в Lua.
         if let Err(error) = protocol::validate(&Message::Command(command.clone())) {
             return Dispatch {
                 result: CommandResult {
@@ -241,6 +372,8 @@ impl Session {
             };
         }
 
+        // Оптимистическая блокировка защищает от команды, рассчитанной на уже
+        // устаревшее состояние мира.
         let mut dispatch = if command.expected_world_revision != self.engine.revision() {
             rejected(
                 &command,
@@ -249,6 +382,8 @@ impl Session {
                 "stale world revision",
             )
         } else {
+            // Только эта ветка способна изменить мир. Engine выполняет Lua
+            // транзакционно и возвращает как вывод скрипта, так и Commit.
             let executed = self
                 .engine
                 .user_event(command.expected_world_revision, command_value(&command))
@@ -270,6 +405,8 @@ impl Session {
                 Err(error) => rejected_with_error(&command, self.engine.revision(), error),
             }
         };
+        // Представление строится только после зафиксированной команды. Его сбой
+        // не откатывает мир и записывается отдельно в presentation_error.
         if dispatch.result.status == CommandStatus::Committed {
             match self.update_view(
                 viewer,
@@ -280,6 +417,8 @@ impl Session {
                 Err(error) => dispatch.presentation_error = Some(error),
             }
         }
+        // Кэшируем и успехи, и отклонения: один command_id на протяжении этого
+        // поколения сессии всегда обозначает один и тот же запрос и результат.
         self.commands.insert(
             command.command_id.clone(),
             CachedCommand {
@@ -291,6 +430,12 @@ impl Session {
         dispatch
     }
 
+    /// Обрабатывает действие пользователя над текущим представлением.
+    ///
+    /// В отличие от [`Session::dispatch`], вход здесь описывает интерфейсное
+    /// намерение: активировать элемент, выбрать клетку, навести курсор или
+    /// закрыть окно. Lua-адаптер `interact` решает, достаточно ли локально
+    /// обновить представление или нужно породить смысловую игровую команду.
     pub fn interact(&mut self, viewer: &str, interaction: Interaction) -> InteractionDelivery {
         if viewer.is_empty() {
             return interaction_error(
@@ -299,6 +444,8 @@ impl Session {
                 "viewer id must not be empty",
             );
         }
+        // UI-взаимодействия, как и команды, могут повторно прийти от транспорта.
+        // Точный повтор безопасно получает прежний результат.
         if let Some(cached) = self.interactions.get(&interaction.interaction_id) {
             return if cached.viewer == viewer && cached.interaction == interaction {
                 cached.delivery.clone()
@@ -310,6 +457,8 @@ impl Session {
                 )
             };
         }
+        // Взаимодействие привязано к той версии интерфейса, которую видел
+        // пользователь. Нельзя применить к уже заменённой кнопке старый клик.
         let current_view = self.viewers.get(viewer).map_or(0, |state| state.revision);
         let delivery = if interaction.expected_view_revision != current_view {
             interaction_error(
@@ -321,6 +470,8 @@ impl Session {
             self.interact_once(viewer, &interaction)
                 .unwrap_or_else(|error| interaction_failure(&interaction.interaction_id, error))
         };
+        // Сохраняем окончательный ответ независимо от успеха, чтобы повтор не
+        // запускал интерпретацию и возможную игровую команду ещё раз.
         self.interactions.insert(
             interaction.interaction_id.clone(),
             CachedInteraction {
@@ -332,16 +483,20 @@ impl Session {
         delivery
     }
 
+    /// Выполняет ещё не встречавшееся взаимодействие без логики дедупликации.
     fn interact_once(
         &mut self,
         viewer: &str,
         interaction: &Interaction,
     ) -> Result<InteractionDelivery, Error> {
+        // Контекст принадлежит конкретному viewer и никогда не смешивается с
+        // контекстами других игроков или наблюдателей.
         let context = self
             .viewers
             .get(viewer)
             .and_then(|state| state.context.clone())
             .unwrap_or_else(|| Value::Map(BTreeMap::new()));
+        // Протокольный enum преобразуется в устойчивые строковые значения Lua.
         let input = Value::Map(BTreeMap::from([
             (
                 "interaction_id".into(),
@@ -362,6 +517,8 @@ impl Session {
             ("target".into(), interaction.target.clone()),
             ("payload".into(), interaction.payload.clone()),
         ]));
+        // Value хранит целые как i64, а счётчик движка — как u64. Переполнение
+        // лучше вернуть как конфликт, чем молча исказить номер мира.
         let world_revision = i64::try_from(self.engine.revision())
             .map_err(|_| Error::new("conflict", "world revision exceeds Value integer range"))?;
         let request = Value::Map(BTreeMap::from([
@@ -370,13 +527,19 @@ impl Session {
             ("world_revision".into(), Value::Integer(world_revision)),
             ("input".into(), input),
         ]));
+        // `interact` является читающим скриптом: он может вычислить команду и
+        // новый UI-контекст, но не может напрямую менять авторитетный мир.
         let result = parse_interaction_result(
             self.engine
                 .read_script("interact", request)
                 .map_err(engine_error)?,
         )
         .map_err(|message| Error::new("script_error", message))?;
+        // Новый контекст сохраняется до построения следующего представления.
         self.viewers.entry(viewer.into()).or_default().context = Some(result.0);
+        // Если интерпретатор породил Action, он проходит обычный dispatch со
+        // всеми проверками и транзакцией. Синтетический ID связывает команду с
+        // исходным взаимодействием и тоже делает повтор безопасным.
         let command = result.1.map(|action| {
             self.dispatch(
                 viewer,
@@ -388,6 +551,8 @@ impl Session {
                 },
             )
         });
+        // Игровая команда сама построит ViewUpdate из своих событий. Если же мир
+        // менять не понадобилось, обновляем только локальное представление.
         let view = if command.is_none() {
             self.update_view(
                 viewer,
@@ -405,6 +570,11 @@ impl Session {
         })
     }
 
+    /// Строит и применяет инкрементальное обновление представления.
+    ///
+    /// В отличие от [`Session::snapshot`], возвращает только заменённые блоки,
+    /// удалённые ID и одноразовые эффекты, а также указывает базовую ревизию,
+    /// поверх которой клиент обязан применить патч.
     fn update_view(
         &mut self,
         viewer: &str,
@@ -421,6 +591,8 @@ impl Session {
             ("view_context".into(), context),
             (
                 "events".into(),
+                // Для Lua контракт всегда одинаков: даже одно событие
+                // представляется списком.
                 match events {
                     Value::List(events) => Value::List(events),
                     event => Value::List(vec![event]),
@@ -436,6 +608,8 @@ impl Session {
         .map_err(|message| Error::new("script_error", message))?;
         let state = self.viewers.entry(viewer.into()).or_default();
         let base = state.revision;
+        // Сначала применяем патч к копии. Настоящее состояние наблюдателя будет
+        // изменено лишь после разбора и полной проверки результата.
         let mut blocks = state.blocks.clone();
         for id in &presentation.remove_ids {
             blocks.remove(id);
@@ -443,6 +617,8 @@ impl Session {
         for block in &presentation.replace_blocks {
             blocks.insert(block.id.clone(), block.content.clone());
         }
+        // Эффекты одноразовые и сами по себе считаются изменением, даже если
+        // долговременные блоки остались прежними.
         let changed = blocks != state.blocks || !presentation.effects.is_empty();
         if !changed {
             return Ok(None);
@@ -458,20 +634,29 @@ impl Session {
             remove_ids: presentation.remove_ids,
             effects: presentation.effects,
         };
+        // До фиксации локальной ревизии проверяем все ссылки на изображения и
+        // другие ресурсы. Ошибочный патч не портит сохранённое состояние viewer.
         protocol::validate_assets(&Message::ViewUpdate(update.clone()), &self.assets)?;
         state.blocks = blocks;
         state.revision = revision;
         Ok(Some(update))
     }
 
+    /// Атомарно заменяет мир сохранённым снимком и начинает новое поколение.
     fn restore_store(&mut self, snapshot: StoreSnapshot) -> Result<(), Error> {
+        // Engine сначала проверяет снимок и Lua-инварианты. При ошибке текущий
+        // мир и вся протокольная история остаются нетронутыми.
         self.engine.restore(snapshot).map_err(engine_error)?;
         let generation = self
             .generation
             .checked_add(1)
             .ok_or_else(|| Error::new("conflict", "session generation exhausted"))?;
         self.generation = generation;
+        // Новый ID не позволяет спутать сообщения до restore с сообщениями уже
+        // восстановленной игры.
         self.id = format!("{}@{generation}", self.root_id);
+        // Результаты старых команд, UI-контексты и номера представлений относятся
+        // к прежнему миру и после восстановления недействительны.
         self.commands.clear();
         self.viewers.clear();
         self.interactions.clear();
@@ -479,6 +664,9 @@ impl Session {
     }
 }
 
+/// Преобразует нетипизированный ответ Lua `present` в строгую структуру
+/// протокола. Здесь намеренно отклоняются отсутствующие поля и значения неверных
+/// типов: дальше код может работать с `Presentation` без дополнительных догадок.
 fn parse_presentation(value: Value) -> Result<Presentation, String> {
     let Value::Map(mut value) = value else {
         return Err("presentation must be a record".into());
@@ -511,6 +699,11 @@ fn parse_presentation(value: Value) -> Result<Presentation, String> {
     })
 }
 
+/// Разбирает ответ Lua `interact`.
+///
+/// Первый элемент результата — новый локальный контекст наблюдателя. Второй —
+/// необязательное смысловое действие, которое затем будет отправлено обычным
+/// путём [`Session::dispatch`].
 fn parse_interaction_result(value: Value) -> Result<(Value, Option<Action>), String> {
     let Value::Map(mut value) = value else {
         return Err("interaction result must be a record".into());
@@ -529,6 +722,8 @@ fn parse_interaction_result(value: Value) -> Result<(Value, Option<Action>), Str
     Ok((context, command))
 }
 
+/// Общий строгий разбор списка Lua-record значений.
+/// Используется для блоков представления и одноразовых эффектов.
 fn parse_items<T>(
     value: Option<Value>,
     parse: impl Fn(BTreeMap<String, Value>) -> Result<T, String>,
@@ -545,6 +740,7 @@ fn parse_items<T>(
         .collect()
 }
 
+/// Забирает обязательную непустую строку из разбираемой записи.
 fn take_string(value: &mut BTreeMap<String, Value>, field: &str) -> Result<String, String> {
     match value.remove(field) {
         Some(Value::String(value)) if !value.is_empty() => Ok(value),
@@ -552,6 +748,10 @@ fn take_string(value: &mut BTreeMap<String, Value>, field: &str) -> Result<Strin
     }
 }
 
+/// Оставляет для игрового Lua только смысловую часть команды.
+///
+/// `command_id` и ожидаемая ревизия являются транспортными данными: сессия уже
+/// обработала их и игровым правилам они не нужны.
 fn command_value(command: &Command) -> Value {
     Value::Map(BTreeMap::from([
         ("action".into(), Value::String(command.action.clone())),
@@ -559,10 +759,12 @@ fn command_value(command: &Command) -> Value {
     ]))
 }
 
+/// Создаёт стандартный ответ об отклонении команды из кода и текста ошибки.
 fn rejected(command: &Command, revision: u64, code: &str, message: impl Into<String>) -> Dispatch {
     rejected_with_error(command, revision, Error::new(code, message))
 }
 
+/// Создаёт отклонённый `Dispatch`, когда готовая протокольная ошибка уже есть.
 fn rejected_with_error(command: &Command, revision: u64, error: Error) -> Dispatch {
     Dispatch {
         result: CommandResult {
@@ -578,6 +780,7 @@ fn rejected_with_error(command: &Command, revision: u64, error: Error) -> Dispat
     }
 }
 
+/// Создаёт ошибку взаимодействия из кода и сообщения.
 fn interaction_error(
     interaction_id: &str,
     code: &str,
@@ -586,6 +789,7 @@ fn interaction_error(
     interaction_failure(interaction_id, Error::new(code, message))
 }
 
+/// Упаковывает готовую ошибку в ответ на UI-взаимодействие.
 fn interaction_failure(interaction_id: &str, error: Error) -> InteractionDelivery {
     InteractionDelivery {
         interaction_id: interaction_id.into(),
@@ -595,6 +799,8 @@ fn interaction_failure(interaction_id: &str, error: Error) -> InteractionDeliver
     }
 }
 
+/// Переводит внутреннюю ошибку движка в ошибку публичного протокола без потери
+/// стабильного машинного кода.
 fn engine_error(error: EngineError) -> Error {
     Error::new(error.code, error.message)
 }
